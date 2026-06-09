@@ -38,6 +38,14 @@ Tools:
 - grep_search (regex over contents) and glob_files (find by name) to navigate code.
 - ask_user ONLY when blocked on a decision that is genuinely the user's to make; otherwise pick a sensible default and proceed.
 
+Browser (Chrome DevTools Protocol):
+- Launch Chrome with --remote-debugging-port=9222. Any Chromium browser works.
+- browser_snapshot returns the accessibility tree — the most token-efficient way to "see" a page. Prefer it over fetching HTML.
+- browser_console shows page errors, warnings, and logs.
+- browser_evaluate runs arbitrary JS in the page and returns JSON-serializable values.
+- browser_click and browser_type target elements by CSS selector or visible text.
+- browser_screenshot captures a PNG of the current viewport.
+
 Verify before claiming done: run the build/tests when you changed code, and report failures honestly with the output.
 `.trim();
 

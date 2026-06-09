@@ -15,6 +15,7 @@ import { registerSearchTools } from "./tools/search.ts";
 import { registerAskTool } from "./tools/ask.ts";
 import { registerSubagentTool } from "./tools/subagents.ts";
 import { registerCompactBuiltins } from "./tools/builtins.ts";
+import { registerBrowserTools } from "./tools/browser.ts";
 import { registerPrompt } from "./prompt.ts";
 import { SubagentReviewer } from "./tools/subagent-review.ts";
 import type { SubagentTask, ReviewAction } from "./tools/subagent-review.ts";
@@ -28,6 +29,7 @@ export default function (pi: ExtensionAPI): void {
   registerAskTool(pi); //        ask_user
   registerSubagentTool(pi); //   spawn_subagents
   registerCompactBuiltins(pi); // compact edit/write output
+  registerBrowserTools(pi); //  browser_navigate, snapshot, click, type, evaluate, console, screenshot
 
   // Operating prompt (token efficiency + parallelism/subagent strategy).
   registerPrompt(pi);
@@ -118,11 +120,38 @@ export default function (pi: ExtensionAPI): void {
     }
   });
 
-  // ── custom footer: "Muhammad Adeel Chaudhary" in yellow ──────────────────
+  // ── custom footer with progress bar and polished layout ────────────────────
 
   pi.on("session_start", (_event, ctx) => {
     ctx.ui.setFooter((tui, theme, footerData) => {
       const unsub = footerData.onBranchChange(() => tui.requestRender());
+
+      // ── progress bar builder ────────────────────────────────────────────
+      const barChars = ["█", "▓", "▒", "░"];
+      const renderBar = (pct: number, barW: number): string => {
+        const clamped = Math.max(0, Math.min(100, pct));
+        const filled = (clamped / 100) * barW;
+        const fullBlocks = Math.floor(filled);
+        const remainder = filled - fullBlocks;
+        let bar = "";
+        if (clamped > 0) {
+          bar = barChars[0]!.repeat(fullBlocks);
+          if (fullBlocks < barW) {
+            const idx = Math.min(barChars.length - 1, Math.floor(remainder * barChars.length));
+            bar += barChars[idx]!;
+            bar += " ".repeat(Math.max(0, barW - fullBlocks - 1));
+          }
+        } else {
+          bar = " ".repeat(barW);
+        }
+        // Color: green < 50% → yellow < 80% → red
+        const color = clamped < 50 ? "success" : clamped < 80 ? "warning" : "error";
+        return theme.fg(color, bar);
+      };
+
+      // ── number formatter ─────────────────────────────────────────────────
+      const fmt = (n: number): string =>
+        n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1_000_000).toFixed(1)}M`;
 
       return {
         dispose: unsub,
@@ -145,37 +174,50 @@ export default function (pi: ExtensionAPI): void {
             }
           }
 
-          const fmt = (n: number) =>
-            n < 1000 ? `${n}` : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1_000_000).toFixed(1)}M`;
-
-          // Context usage + budget
           const usage = ctx.getContextUsage();
-          let ctxStr = "";
-          if (usage?.contextWindow) {
-            const used = usage.tokens != null ? fmt(usage.tokens) : "?";
-            const total = fmt(usage.contextWindow);
-            const pct = usage.percent != null ? `${usage.percent}% ` : "";
-            ctxStr = `${pct}${used}/${total}`;
-          }
 
-          // Top line: git branch + token stats / context on left, model on right
+          // ── build left-side parts ────────────────────────────────────────
+          const parts: string[] = [];
+
+          // Git branch (accent color)
           const branch = footerData.getGitBranch();
-          const leftParts: string[] = [];
-          if (branch) leftParts.push(theme.fg("accent", branch));
-          leftParts.push(`↑${fmt(input)} ↓${fmt(output)}`);
+          if (branch) parts.push(theme.fg("accent", theme.bold(`🌿 ${branch}`)));
+
+          // Token I/O (compact: ↑ / ↓ symbols)
+          parts.push(theme.fg("dim", `${theme.fg("success", "↑")}${fmt(input)} ${theme.fg("error", "↓")}${fmt(output)}`));
+
+          // Cache
           if (cacheRead > 0 || cacheWrite > 0) {
-            leftParts.push(`R${fmt(cacheRead)} W${fmt(cacheWrite)}`);
+            const r = cacheRead > 0 ? `${theme.fg("muted", "R")}${fmt(cacheRead)}` : "";
+            const w = cacheWrite > 0 ? `${theme.fg("muted", "W")}${fmt(cacheWrite)}` : "";
+            parts.push(theme.fg("dim", [r, w].filter(Boolean).join(" ")));
           }
-          leftParts.push(`$${cost.toFixed(3)}`);
-          if (ctxStr) leftParts.push(ctxStr);
-          const left = theme.fg("dim", leftParts.join("  "));
 
+          // Cost
+          parts.push(theme.fg("dim", `$${cost.toFixed(3)}`));
+
+          // Context: bar + percentage
+          if (usage?.contextWindow) {
+            const pct = usage.percent ?? 0;
+            const usedStr = usage.tokens != null ? fmt(usage.tokens) : "?";
+            const totalStr = fmt(usage.contextWindow);
+            const barW = Math.min(16, Math.max(6, Math.floor(width * 0.15)));
+            const bar = renderBar(pct, barW);
+            const pctStr = theme.fg(pct >= 80 ? "error" : pct >= 50 ? "warning" : "success", theme.bold(`${String(Math.round(pct)).padStart(3)}%`));
+            const ctxLabel = theme.fg("muted", "ctx");
+            parts.push(`${ctxLabel} ${bar} ${pctStr} ${theme.fg("dim", `${usedStr}/${totalStr}`)}`);
+          }
+
+          const left = parts.join(` ${theme.fg("borderMuted", "│")} `);
+
+          // Model name on the right
           const modelStr = ctx.model?.id ?? "no-model";
-          const modelLine = theme.fg("dim", modelStr);
-          const padTop = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(modelLine)));
-          const topLine = truncateToWidth(left + padTop + modelLine, width);
+          const modelLabel = theme.fg("dim", `◆ ${modelStr}`);
 
-          // Bottom line: name on the right, in yellow
+          const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(modelLabel)));
+          const topLine = truncateToWidth(left + pad + modelLabel, width);
+
+          // ── bottom line: credit on the right, in warning color ───────────
           const name = theme.fg("warning", theme.bold("Muhammad Adeel Chaudhary"));
           const padBottom = " ".repeat(Math.max(0, width - visibleWidth(name)));
           const bottomLine = truncateToWidth(padBottom + name, width);
