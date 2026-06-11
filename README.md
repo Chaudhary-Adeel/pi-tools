@@ -1,145 +1,139 @@
 # pi-tools
 
 A batteries-included [Pi](https://pi.dev) package: coding tools, browser
-automation, a token-efficient operating prompt, and parallel subagents.
-Built for lean models where keeping the context window small matters.
+automation, persistent memory, parallel subagents, and a token-efficient
+operating prompt. Built for lean models where context window budget matters.
 
-Zero runtime dependencies — just Node built-ins and Pi's own packages.
+Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 
 ## What's inside
 
-### File & Web Tools
+### Agent Tools
 
 | Tool | What it does |
-| --- | --- |
+|------|--------------|
 | `web_fetch` | Fetch a URL and return readable text (HTML→text), or raw for JSON/XML |
 | `web_search` | Search the web; keyless (DuckDuckGo) or via `TAVILY_API_KEY` |
-| `read_file` | Read a text file with line numbers + offset/limit. Streams large files (>2MB) |
+| `read_file` | Read a text file with line numbers + offset/limit |
 | `grep_search` | Regex search over file contents, with glob filter |
 | `glob_files` | Find files by `**/*.ext`-style pattern |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
 | `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context) |
+| `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 
-For editing, writing, and shell commands, use Pi's built-in tools: `edit`, `write`, `bash`.
+**Browser (CDP):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps.
 
-### Browser Tools (CDP)
+For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 
-Control a real Chromium-based browser via Chrome DevTools Protocol. Zero deps — hand-rolled WebSocket over `node:net`.
+### Slash Commands
 
-| Tool | What it does |
-| --- | --- |
-| `browser_navigate` | Go to a URL |
-| `browser_snapshot` | Get accessibility tree of the page (token-efficient page view) |
-| `browser_click` | Click an element by CSS selector or visible text |
-| `browser_type` | Type text into an input field |
-| `browser_evaluate` | Run JavaScript in the page context |
-| `browser_console` | Read console messages (log, warn, error, exceptions) |
-| `browser_screenshot` | Capture a PNG screenshot (renders inline in chat) |
+| Command | What it does |
+|---------|--------------|
+| `/memory` | Interactive TUI dashboard — like looking inside Pi's brain. See what's stored, token budget gauge, progress tracker. Tabs: tree, system, learnings, progress |
+| `/learn` | Distill the current session into reusable memory — writes durable learnings to `.pi/memory/learnings/` |
+| `/skill:browser` | Loads browser automation instructions into context |
 
-**Skill included:** `/skill:browser` auto-loads browser instructions into context.
-Run `./skills/browser/start.sh` to launch a browser with the right flags — it auto-detects Chrome/Brave/Edge/Chromium.
+**Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
 
-### Operating Prompt
+### Memory System
 
-Injected at agent start — pushes the model to batch independent tool calls,
-delegate to subagents, read only what it needs, and answer concisely.
+Pi's brain, persisted across sessions in `.pi/memory/`:
+
+- **System memory** (`.pi/memory/system/*.md`) — injected into context every turn. Project conventions, commands, persona, progress.
+- **Learnings** (`.pi/memory/learnings/*.md`) — on-demand. The agent sees descriptions and loads files with `read` when needed.
+- **Progress tracker** (`.pi/memory/system/progress.md`) — task status, checklists, decisions, next steps. Agent maintains it automatically.
+- **Memory map** (`.pi/memory/memory-map.md`) — auto-generated index of everything in memory: sizes, token estimates, budget utilization, topology tree.
+
+The agent is instructed to write to these files as its long-term memory. Use `/memory` to see the full dashboard or `memory_map` tool to query from a prompt.
+
+#### Auto-capture learnings
+
+When an interactive session ends after real work, a background distiller reads the
+conversation and saves any durable, reusable insights (bug root causes, API gotchas,
+conventions, working commands) to `.pi/memory/learnings/` — so the agent gets smarter
+across sessions without you doing anything.
+
+- Runs in a detached `pi -p` subprocess on exit, so it never blocks shutdown.
+- Skips trivial sessions and avoids duplicating existing learnings.
+- Run `/learn` any time to capture the current session on demand.
+- Pass `--no-auto-learn` to disable automatic capture for a run.
+
+### Smart Prompting
+
+- **Token-efficient operating prompt** — pushes the model to batch tool calls, delegate to subagents, read only what it needs.
+- **Model-aware coding instructions** — extra guardrails for DeepSeek models (XML-structured self-verification, context management).
+- **Live memory injection** — system memory + learning summaries + progress are injected fresh each turn from disk.
 
 ### Footer
 
-A polished two-line footer with:
-- **Context window progress bar** — colored block characters (🟢 < 50% → 🟡 50-80% → 🔴 > 80%)
-- **Token stats** — `↑` / `↓` input/output with color coding
-- **Git branch, cost, model** — compact layout with `│` separators
-- **Credit** — "Muhammad Adeel Chaudhary" in yellow on the bottom line
+Two-line footer with context window progress bar (colored block chars), token I/O stats (↑/↓), cache hits, cost, subagent contribution, git branch, and model name.
+
+Git commits through Pi are automatically signed as `adeel.bot`.
 
 ## Install
 
-From the package directory (this folder):
-
 ```bash
+# Local (from this directory)
 pi install /absolute/path/to/pi-tools
-```
 
-Or via git/npm:
-
-```bash
+# Or via git
 pi install git:github.com/chaudhary-adeel/pi-tools
-pi install npm:pi-tools
-```
 
-To try it without installing:
-
-```bash
+# Quick test without installing
 pi -e ./src/index.ts
 ```
 
-No `npm install` needed — zero runtime dependencies. For editor type-checking:
-
+No `npm install` needed. For editor type-checking only:
 ```bash
-npm install   # optional, only for tsconfig/type-checking
+npm install
 ```
 
-## Configuration
+## Config
 
-- `TAVILY_API_KEY` — if set, `web_search` uses Tavily for higher-quality results; otherwise falls back to keyless DuckDuckGo.
+- `TAVILY_API_KEY` — enables Tavily-backed `web_search` (falls back to DuckDuckGo otherwise)
 
 ## Browser Setup
 
-The browser tools connect to a running Chromium-based browser via CDP.
-
-**One-time launch (the skill handles this automatically):**
-
 ```bash
-./skills/browser/start.sh
+./skills/browser/start.sh   # auto-detects Chrome/Brave/Edge/Chromium, creates isolated profile
 ```
 
-Or manually:
-
-```bash
-google-chrome --remote-debugging-port=9222
-# or: brave-browser --remote-debugging-port=9222
-# or: chromium --remote-debugging-port=9222
-```
-
-The `start.sh` script auto-detects your installed browser and creates an isolated profile at `~/.pi/browser-profile`.
-
-## Subagents
-
-`spawn_subagents` spawns separate `pi --mode json -p --no-session` subprocesses —
-each with its own isolated context window — runs them concurrently (default 4 at
-a time), and returns only their final answers. Give each subtask a
-**self-contained** prompt; a subagent cannot see the parent conversation.
+Or manually: `google-chrome --remote-debugging-port=9222`
 
 ## Layout
 
 ```
 pi-tools/
 ├── package.json
-├── tsconfig.json
 ├── README.md
-├── skills/
-│   └── browser/
-│       ├── SKILL.md              # skill definition
-│       ├── start.sh              # launch browser with CDP
-│       └── references/
-│           └── tools.md          # detailed tool reference
+├── skills/browser/              # browser automation skill
+├── .pi/memory/                  # agent's persistent memory
+│   ├── memory-map.md            #   auto-generated index
+│   ├── system/                  #   injected every turn
+│   └── learnings/               #   on-demand
 └── src/
-    ├── index.ts                  # entry: tools + prompt + footer
-    ├── prompt.ts                 # token-efficient operating prompt
+    ├── index.ts                 # entry point
+    ├── prompt.ts                # operating prompt
+    ├── commands/
+    │   └── memory-command.ts    # /memory TUI dashboard
     ├── lib/
-    │   ├── shared.ts             # helpers (truncate, html→text, etc.)
-    │   └── browser-cdp.ts        # zero-dep CDP client (hand-rolled WebSocket)
+    │   ├── memory.ts            # two-tier memory system
+    │   ├── memory-map.ts        # footprint computation + map generation
+    │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory injection
+    │   ├── browser-cdp.ts       # zero-dep CDP client
+    │   └── shared.ts            # helpers
     └── tools/
-        ├── web.ts                # web_fetch, web_search
-        ├── files.ts              # read_file
-        ├── search.ts             # grep_search, glob_files
-        ├── ask.ts                # ask_user
-        ├── subagents.ts          # spawn_subagents
-        ├── subagent-review.ts    # Ctrl+O subagent prompt editor
-        ├── builtins.ts           # compact edit/write output
-        └── browser.ts            # browser_navigate, snapshot, click, type, evaluate, console, screenshot
+        ├── web.ts               # web_fetch, web_search
+        ├── files.ts             # read_file
+        ├── search.ts            # grep_search, glob_files
+        ├── ask.ts               # ask_user
+        ├── subagents.ts         # spawn_subagents
+        ├── memory.ts            # memory_map
+        ├── browser.ts           # 7 CDP browser tools
+        ├── builtins.ts          # compact edit/write output
+        └── subagent-review.ts   # Ctrl+O prompt editor
 ```
 
 ## Security
 
-Pi packages run with full system access. Only install packages you trust, and review the source before enabling in untrusted projects.
+Pi packages run with full system access. Review the source before installing.

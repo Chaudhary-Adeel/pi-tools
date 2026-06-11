@@ -19,6 +19,13 @@ import { registerBrowserTools } from "./tools/browser.ts";
 import { registerPrompt } from "./prompt.ts";
 import { SubagentReviewer } from "./tools/subagent-review.ts";
 import type { SubagentTask, ReviewAction } from "./tools/subagent-review.ts";
+import { getSubagentUsage, resetSubagentTokens } from "./lib/subagent-tokens.ts";
+import { registerCodingPrompt } from "./lib/deepseek-prompt.ts";
+import { ensureMemoryDirs } from "./lib/memory.ts";
+import { registerMemoryCommand } from "./commands/memory-command.ts";
+import { registerMemoryMapTool } from "./tools/memory.ts";
+import { registerLearnCommand } from "./commands/learn-command.ts";
+import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
 
 export default function (pi: ExtensionAPI): void {
   // Unique tools.  Pi's built-ins (write, edit, bash) cover the rest —
@@ -33,6 +40,56 @@ export default function (pi: ExtensionAPI): void {
 
   // Operating prompt (token efficiency + parallelism/subagent strategy).
   registerPrompt(pi);
+
+  // Model-aware coding prompt + live memory injection.
+  // Injects project memory from .pi/memory/, DeepSeek guardrails, and
+  // progress tracking at each session start / after compaction.
+  registerCodingPrompt(pi);
+
+  // /memory command — interactive TUI dashboard for memory footprint.
+  registerMemoryCommand(pi);
+
+  // memory_map tool — agent-callable memory inspection and index generation.
+  registerMemoryMapTool(pi);
+
+  // /learn command — manually distill the current session into learnings.
+  registerLearnCommand(pi);
+
+  // Flag to opt out of automatic learning capture on exit.
+  pi.registerFlag("no-auto-learn", {
+    description: "Disable automatic learning capture when the session ends",
+    type: "boolean",
+    default: false,
+  });
+
+  // ── Auto-capture learnings on session end ────────────────────────────────
+  // When an interactive session ends after real work, distill durable,
+  // reusable learnings into .pi/memory/learnings/ in the background.
+  //
+  // Recursion is impossible here: the distiller runs as `pi -p` (mode
+  // "print"), and this hook only fires for mode "tui". The PI_TOOLS_DISTILL
+  // env guard is a second safety net.
+  pi.on("session_shutdown", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    if (process.env.PI_TOOLS_DISTILL === "1") return;
+    if (pi.getFlag("no-auto-learn") === true) return;
+    // Only capture on real exits / session swaps, not transient reloads.
+    if (event.reason === "reload") return;
+
+    try {
+      const summary = buildSessionSummary(ctx.sessionManager.getBranch() as unknown[]);
+      if (!hasMeaningfulActivity(summary)) return;
+      // Fire-and-forget: detached subprocess survives this process exiting.
+      distillLearnings({
+        cwd: ctx.cwd,
+        summary,
+        model: ctx.model?.id,
+        background: true,
+      });
+    } catch {
+      /* never block shutdown on capture errors */
+    }
+  });
 
   // ── Ctrl+O subagent prompt expansion + git identity injection ────────────
 
@@ -120,6 +177,12 @@ export default function (pi: ExtensionAPI): void {
     }
   });
 
+  // Reset subagent token tracking + ensure memory dirs on session start.
+  pi.on("session_start", (_event, ctx) => {
+    resetSubagentTokens();
+    ensureMemoryDirs(ctx.cwd);
+  });
+
   // ── custom footer with progress bar and polished layout ────────────────────
 
   pi.on("session_start", (_event, ctx) => {
@@ -176,6 +239,15 @@ export default function (pi: ExtensionAPI): void {
 
           const usage = ctx.getContextUsage();
 
+          // ── Add subagent LLM usage to totals (they run in separate ──
+          // ── processes so ctx.sessionManager doesn't see them).       ──
+          const sub = getSubagentUsage();
+          input += sub.input;
+          output += sub.output;
+          cacheRead += sub.cacheRead;
+          cacheWrite += sub.cacheWrite;
+          cost += sub.cost;
+
           // ── build left-side parts ────────────────────────────────────────
           const parts: string[] = [];
 
@@ -183,7 +255,7 @@ export default function (pi: ExtensionAPI): void {
           const branch = footerData.getGitBranch();
           if (branch) parts.push(theme.fg("accent", theme.bold(`🌿 ${branch}`)));
 
-          // Token I/O (compact: ↑ / ↓ symbols)
+          // Token I/O (compact: ↑ / ↓ symbols) — includes subagent tokens
           parts.push(theme.fg("dim", `${theme.fg("success", "↑")}${fmt(input)} ${theme.fg("error", "↓")}${fmt(output)}`));
 
           // Cache
@@ -193,10 +265,10 @@ export default function (pi: ExtensionAPI): void {
             parts.push(theme.fg("dim", [r, w].filter(Boolean).join(" ")));
           }
 
-          // Cost
+          // Cost — includes subagent cost
           parts.push(theme.fg("dim", `$${cost.toFixed(3)}`));
 
-          // Context: bar + percentage
+          // Context: bar + percentage.
           if (usage?.contextWindow) {
             const pct = usage.percent ?? 0;
             const usedStr = usage.tokens != null ? fmt(usage.tokens) : "?";
@@ -206,6 +278,12 @@ export default function (pi: ExtensionAPI): void {
             const pctStr = theme.fg(pct >= 80 ? "error" : pct >= 50 ? "warning" : "success", theme.bold(`${String(Math.round(pct)).padStart(3)}%`));
             const ctxLabel = theme.fg("muted", "ctx");
             parts.push(`${ctxLabel} ${bar} ${pctStr} ${theme.fg("dim", `${usedStr}/${totalStr}`)}`);
+          }
+
+          // Show subagent contribution if non-zero
+          if (sub.input > 0 || sub.output > 0) {
+            const subTokens = sub.input + sub.output;
+            parts.push(theme.fg("accent", `↳sub ${fmt(subTokens)}`));
           }
 
           const left = parts.join(` ${theme.fg("borderMuted", "│")} `);

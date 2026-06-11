@@ -1,5 +1,7 @@
 // Small helpers shared across tools. No external deps — Node builtins only.
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ToolResult } from "@earendil-works/pi-coding-agent";
 
 /** Wrap plain text into the ToolResult shape Pi expects. */
@@ -72,3 +74,19 @@ export function globToRegExp(glob: string): RegExp {
   }
   return new RegExp("^" + re + "$", "i");
 }
+
+/** Resolve how to invoke the `pi` CLI for spawning subprocesses.
+ *  Mirrors the logic used by the subagent spawner so distillation can reuse it. */
+export function getPiCommand(): { command: string; args: string[] } {
+  const currentScript = process.argv[1];
+  // Bun virtual scripts point into $bunfs — not useful for spawning.
+  const isBunVirtual = currentScript?.startsWith("/$bunfs/root/");
+  if (currentScript && !isBunVirtual && fs.existsSync(currentScript)) {
+    return { command: process.execPath, args: [currentScript] };
+  }
+  const execName = path.basename(process.execPath).toLowerCase();
+  const isGeneric = /^(node|bun)(\.exe)?$/.test(execName);
+  if (!isGeneric) return { command: process.execPath, args: [] };
+  return { command: "pi", args: [] };
+}
+

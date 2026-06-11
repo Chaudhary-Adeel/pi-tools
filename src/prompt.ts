@@ -29,6 +29,7 @@ Parallelism:
 - When a task splits into self-contained chunks that don't need each other's output (research several areas, draft independent sections, investigate multiple files), call spawn_subagents to fan them out. Each subagent has its own context window, so this keeps THIS context small and runs the work concurrently.
 - Each subagent prompt must stand alone: it can't see this conversation — include every path, fact, and constraint it needs. Only conclusions come back.
 - Don't spawn subagents for a single linear task or for steps that must run in order.
+- For large subagent results (file analysis, code reviews, extensive reports), use output_to_files: true so results are written to temp files instead of filling up the main context window. Read the files with Pi's built-in read tool when you need the full output.
 
 Tools:
 - web_search to find current info, then web_fetch to read a result.
@@ -47,6 +48,14 @@ Browser (Chrome DevTools Protocol):
 - browser_screenshot captures a PNG of the current viewport.
 
 Verify before claiming done: run the build/tests when you changed code, and report failures honestly with the output.
+
+Memory & persistence:
+- Your project memory lives in .pi/memory/system/*.md (conventions, commands, progress). These files are injected into context at session start — read and maintain them.
+- Track your progress in .pi/memory/system/progress.md: update the checklist after each step, log decisions with rationale, list next steps.
+- When you discover patterns or make important decisions, save them to .pi/memory/learnings/<topic>.md with a YAML frontmatter description.
+- This is your long-term memory across sessions — use it so you don't forget context.
+- Use memory_map tool to inspect your memory footprint, check token budget, or regenerate the memory-map.md index.
+- The user can type /memory for an interactive dashboard of everything you remember.
 `.trim();
 
 export function registerPrompt(pi: ExtensionAPI): void {

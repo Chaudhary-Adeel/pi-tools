@@ -12,12 +12,14 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, errorText, truncate } from "../lib/shared.ts";
+import { addSubagentUsage, type SubagentUsage } from "../lib/subagent-tokens.ts";
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -35,7 +37,7 @@ interface SubResult {
   model?: string;
   stopReason?: string;
   turns: number;
-  tokens: { input: number; output: number };
+  usage: SubagentUsage;
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -70,7 +72,7 @@ function runOne(
       exitCode: 0,
       stderr: "",
       turns: 0,
-      tokens: { input: 0, output: 0 },
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
     };
 
     let wasAborted = false;
@@ -105,9 +107,13 @@ function runOne(
         const msg = event.message as Message;
         if (msg.role === "assistant") {
           result.turns++;
+          result.usage.turns = result.turns;
           if (msg.usage) {
-            result.tokens.input += msg.usage.input || 0;
-            result.tokens.output += msg.usage.output || 0;
+            result.usage.input += msg.usage.input || 0;
+            result.usage.output += msg.usage.output || 0;
+            result.usage.cacheRead += (msg.usage as any).cacheRead ?? 0;
+            result.usage.cacheWrite += (msg.usage as any).cacheWrite ?? 0;
+            result.usage.cost += (msg.usage as any).cost?.total ?? 0;
           }
           if (!result.model && msg.model) result.model = msg.model;
           if (msg.stopReason) result.stopReason = msg.stopReason;
@@ -204,6 +210,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "Give each subagent a self-contained prompt: it cannot see this conversation, so include every fact, path, and constraint it needs.",
       "Do NOT use it for a single linear task, or when subtasks must run in sequence.",
       "Prefer it over doing many large reads/searches inline when you only need the conclusions, to save the main context window.",
+      "When subagent results would be large (extensive code, long reports), set output_to_files: true to write results to temp files instead of bloating the main context window. Read files with Pi's built-in read tool when you need the full output.",
     ],
     parameters: Type.Object({
       tasks: Type.Array(
@@ -225,6 +232,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       max_concurrency: Type.Optional(
         Type.Number({
           description: "Max subagents to run at once (default 4).",
+        }),
+      ),
+      output_to_files: Type.Optional(
+        Type.Boolean({
+          description:
+            "If true, write subagent results to temp files instead of returning " +
+            "them inline. Returns file paths with brief summaries. This keeps " +
+            "subagent result text OUT of the main context window entirely, so " +
+            "the context bar won't bloat. Read the files with Pi's built-in read " +
+            "tool when you need the full results. Default: false (inline results).",
         }),
       ),
     }),
@@ -264,13 +281,70 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           })
           .join("\n\n---\n\n");
 
+        const resultBody = truncate(body, 40_000);
         ctx.ui.setStatus(undefined);
-        return text(truncate(body, 40_000), {
+
+        // ── Accumulate subagent LLM usage into the tracker so the ──
+        // ── main footer can show the combined total.               ──
+        const agg: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+        for (const r of results) {
+          agg.input += r.usage.input;
+          agg.output += r.usage.output;
+          agg.cacheRead += r.usage.cacheRead;
+          agg.cacheWrite += r.usage.cacheWrite;
+          agg.cost += r.usage.cost;
+          agg.turns += r.usage.turns;
+        }
+        addSubagentUsage(agg);
+
+        // ── File-output mode: persist results to disk, return references ──
+        if (params.output_to_files) {
+          const tmpDir = await fs.promises.mkdtemp(
+            path.join(os.tmpdir(), "pi-subagent-"),
+          );
+          const filePaths: string[] = [];
+          for (const r of results) {
+            const fname = `subagent-${r.index + 1}-result.md`;
+            const fp = path.join(tmpDir, fname);
+            const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
+            const content = `# Subagent ${r.index + 1}  ${status}\n\n**Task:** ${r.prompt}\n\n**Result:**\n${r.output || r.stderr || "(no output)"}`;
+            await fs.promises.writeFile(fp, content, "utf-8");
+            filePaths.push(fp);
+          }
+
+          // Return compact references — NOT the full text. This keeps the
+          // context window lean.
+          const refSummary = results
+            .map((r, i) => {
+              const status = r.exitCode === 0 ? "✓" : `✗`;
+              const preview = (r.output || r.stderr || "").slice(0, 120);
+              return `${status} **Subagent ${r.index + 1}:** ${r.prompt.slice(0, 80)}… → \`${filePaths[i]}\`\n> ${preview}…`;
+            })
+            .join("\n\n");
+
+          return text(
+            `Subagent results written to ${tmpDir}/\n\n${refSummary}\n\nUse Pi's \`read\` tool to load full results.`,
+            {
+              count: results.length,
+              successCount: results.filter((r) => r.exitCode === 0).length,
+              prompts: results.map((r) => r.prompt),
+              models: results.map((r) => r.model).filter(Boolean),
+              totalTurns: results.reduce((s, r) => s + r.turns, 0),
+              subagentUsage: agg,
+              outputDir: tmpDir,
+              outputFiles: filePaths,
+            },
+          );
+        }
+
+        // ── Inline mode (default) ──
+        return text(resultBody, {
           count: results.length,
           successCount: results.filter((r) => r.exitCode === 0).length,
           prompts: results.map((r) => r.prompt),
           models: results.map((r) => r.model).filter(Boolean),
           totalTurns: results.reduce((s, r) => s + r.turns, 0),
+          subagentUsage: agg,
         });
       } catch (_err) {
         ctx.ui.setStatus(undefined);
