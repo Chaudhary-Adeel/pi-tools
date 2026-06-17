@@ -15,6 +15,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { computeFootprint, generateMemoryMap, updateMemoryMap, estimateTokens, type MemoryFootprint, type MemoryStats } from "../lib/memory-map.ts";
 import type { MemoryFile, Progress } from "../lib/memory.ts";
 import { ensureMemoryDirs } from "../lib/memory.ts";
+import { formatBytes } from "../lib/shared.ts";
 
 // ── TUI rendering ─────────────────────────────────────────────────────────
 
@@ -221,14 +222,6 @@ function renderProgressView(fp: MemoryFootprint, theme: any): string[] {
   }
 
   return lines;
-}
-
-// ── helpers ────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ── register ───────────────────────────────────────────────────────────────

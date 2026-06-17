@@ -15,6 +15,7 @@ import {
   formatLearningSummaries,
   formatProgressInjection,
 } from "./memory.ts";
+import { getTokenBudget } from "./memory-map.ts";
 
 // ── detect DeepSeek model ───────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ export function registerCodingPrompt(pi: ExtensionAPI): void {
 
     // Read memory from disk — fresh each session / after compaction
     const cwd = ctx.cwd;
-    const memoryBlock = formatSystemMemory(cwd, 4000); // ~4K token budget for memory
+    const memoryBlock = formatSystemMemory(cwd, getTokenBudget());
     const progressBlock = formatProgressInjection(cwd);
     const learningSummaries = formatLearningSummaries(cwd);
 

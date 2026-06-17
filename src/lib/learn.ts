@@ -97,6 +97,16 @@ export function buildSessionSummary(entries: unknown[]): SessionSummary {
   };
 }
 
+/** Keywords that indicate a user explicitly wants something remembered. */
+const REMEMBER_KEYWORDS = [
+  "remember",
+  "note this",
+  "save this",
+  "don't forget",
+  "make a note",
+  "keep in mind",
+];
+
 /** Heuristic: is this session worth distilling? Avoids noisy captures from
  *  trivial sessions (a one-line greeting) while still catching short-but-
  *  substantive ones (a single explicit "remember this …" insight). */
@@ -108,6 +118,9 @@ export function hasMeaningfulActivity(summary: SessionSummary): boolean {
   // A multi-turn back-and-forth, OR a single substantive exchange with enough
   // content to plausibly contain a durable insight.
   if (summary.userTurns >= 3 && summary.assistantTurns >= 3) return true;
+  // Check for explicit "remember this" style keywords in the transcript.
+  const lower = summary.transcript.toLowerCase();
+  if (REMEMBER_KEYWORDS.some((kw) => lower.includes(kw))) return true;
   return summary.transcript.length >= 600;
 }
 

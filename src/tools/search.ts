@@ -23,7 +23,6 @@ export function registerSearchTools(pi: ExtensionAPI): void {
       "(skips node_modules, .git, etc). Returns matching file:line: text.",
     promptSnippet: "search file contents by regex",
     promptGuidelines: [
-      "Use grep_search to find where a symbol, string, or pattern appears in the codebase.",
       "Narrow with the glob filter (e.g. **/*.ts) to keep results focused.",
     ],
     parameters: Type.Object({

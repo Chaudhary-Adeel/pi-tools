@@ -15,7 +15,6 @@ export function registerAskTool(pi: ExtensionAPI): void {
       "credentials). Do not use it for things you can infer or look up.",
     promptSnippet: "ask the user a blocking question when you truly need their input",
     promptGuidelines: [
-      "Use ask_user only when blocked on a decision that is genuinely the user's to make.",
       "Prefer sensible defaults and continue working rather than asking about trivia.",
       "Provide choices when the answer is one of a small set of options.",
     ],

@@ -16,6 +16,49 @@ import { Text } from "@earendil-works/pi-tui";
 import { text, errorText, truncate } from "../lib/shared.ts";
 import { CDPClient, type ConsoleEntry } from "../lib/browser-cdp.ts";
 
+// ── SSRF / protocol safety ──────────────────────────────────────────────────
+
+const BLOCKED_PROTOCOLS = /^(file|ftp|data|javascript|vbscript):/i;
+
+const PRIVATE_IPV4 = [
+  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+  /^192\.168\.\d{1,3}\.\d{1,3}$/,
+  /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^169\.254\.\d{1,3}\.\d{1,3}$/,
+  /^0\.0\.0\.0$/,
+];
+
+function isPrivateHost(hostname: string): boolean {
+  for (const re of PRIVATE_IPV4) {
+    if (re.test(hostname)) return true;
+  }
+  if (hostname === "::1" || hostname === "::") return true;
+  if (/^fc[0-9a-f]{2}:/i.test(hostname)) return true;
+  if (/^fd[0-9a-f]{2}:/i.test(hostname)) return true;
+  if (/^fe80:/i.test(hostname)) return true;
+  return false;
+}
+
+function validateBrowserUrl(rawUrl: string): string | null {
+  if (BLOCKED_PROTOCOLS.test(rawUrl)) {
+    return `Refusing to navigate to blocked protocol URL: ${rawUrl}`;
+  }
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    return `Refusing to navigate to non-http(s) URL: ${rawUrl}`;
+  }
+  let hostname: string;
+  try {
+    hostname = new URL(rawUrl).hostname;
+  } catch {
+    return `Invalid URL: ${rawUrl}`;
+  }
+  if (isPrivateHost(hostname)) {
+    return `Refusing to navigate to private/reserved IP: ${hostname}`;
+  }
+  return null;
+}
+
 // ── singleton client (lazy-connect, shared across tools) ───────────────────
 
 let client: CDPClient | null = null;
@@ -65,6 +108,8 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       ),
     }),
     async execute(_id, params) {
+      const urlError = validateBrowserUrl(params.url);
+      if (urlError) return errorText(urlError);
       try {
         await ensureConnected(params.port);
         await getClient(params.port).navigate(params.url);
@@ -105,7 +150,6 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       "Returns element roles, names, and values — not raw HTML.",
     promptSnippet: "get the page accessibility tree",
     promptGuidelines: [
-      "Use browser_snapshot to see what's on the page. Much more token-efficient than scraping HTML.",
       "The tree shows interactive elements with their roles (button, link, textbox) and labels.",
       "Pass a smaller depth to focus on the top-level structure; larger to dive into details.",
     ],
@@ -160,7 +204,6 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       "For text matching, use any unique substring of the element's text content.",
     promptSnippet: "click an element on the page",
     promptGuidelines: [
-      "Use CSS selectors (e.g., '#submit', '.btn-primary', 'button') or visible text.",
       "Run browser_snapshot first to see what's clickable on the page.",
     ],
     parameters: Type.Object({
@@ -207,7 +250,6 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       "then types the new value. Target the field by CSS selector.",
     promptSnippet: "type text into a field",
     promptGuidelines: [
-      "Use a CSS selector to target the input element (e.g., '#search', 'input[name=\"q\"]').",
       "Run browser_snapshot first to find the correct input field.",
     ],
     parameters: Type.Object({
@@ -260,7 +302,6 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       "global variables, etc. Returns only JSON-serializable values.",
     promptSnippet: "run JavaScript in the browser page",
     promptGuidelines: [
-      "Use browser_evaluate to extract data, check state, or interact programmatically.",
       "The expression is wrapped in a Promise — use 'return' for values, 'await' for async.",
       "Functions and DOM nodes can't be serialized; extract the data you need.",
     ],
@@ -322,7 +363,6 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       "Messages are collected automatically while connected.",
     promptSnippet: "read the browser console output",
     promptGuidelines: [
-      "Use browser_console to see errors, warnings, and log output from the page.",
       "Pass 'clear: true' to clear the message buffer after reading.",
     ],
     parameters: Type.Object({
@@ -384,7 +424,6 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       "image data. The image appears inline in the chat.",
     promptSnippet: "take a screenshot of the page",
     promptGuidelines: [
-      "Use browser_screenshot to visually inspect the page.",
       "Screenshots are base64 PNG — large but useful for visual debugging.",
     ],
     parameters: Type.Object({

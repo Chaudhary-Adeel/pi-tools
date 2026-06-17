@@ -16,6 +16,13 @@ export function errorText(s: string): ToolResult {
   return { content: [{ type: "text", text: s }], isError: true };
 }
 
+/** Format byte counts into human-readable strings. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** Truncate long output so a single tool call can't blow the context window.
  *  Keeps head + tail, which is what's usually useful (start of a file / file
  *  listing, plus the tail of command output where errors live). */

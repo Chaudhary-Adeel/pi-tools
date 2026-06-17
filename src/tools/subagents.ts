@@ -18,7 +18,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate } from "../lib/shared.ts";
+import { text, errorText, truncate, getPiCommand } from "../lib/shared.ts";
 import { addSubagentUsage, type SubagentUsage } from "../lib/subagent-tokens.ts";
 
 // ── types ──────────────────────────────────────────────────────────────────
@@ -40,20 +40,45 @@ interface SubResult {
   usage: SubagentUsage;
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
+interface SubActivity {
+  index: number;
+  toolName: string;
+  description: string;
+}
 
-/** Find the `pi` CLI binary. Falls back to literal "pi" if we can't infer. */
-function getPiCommand(): { command: string; args: string[] } {
-  const currentScript = process.argv[1];
-  // Bun virtual scripts point into $bunfs — not useful for spawning.
-  const isBunVirtual = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtual && fs.existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript] };
+/** Build a human-readable label from a tool name + args. */
+function describeTool(toolName: string, args: Record<string, unknown>): string {
+  const path = (args.path ?? args.file_path ?? args.filePath ?? args.url ?? "") as string;
+  const query = args.query ?? args.pattern ?? "";
+  const cmd = (args.command ?? "") as string;
+  switch (toolName) {
+    case "read":
+    case "read_file": return `reading ${shortPath(path)}`;
+    case "write": return `writing ${shortPath(path)}`;
+    case "edit": return `editing ${shortPath(path)}`;
+    case "bash": return `bash: ${shortCmd(cmd)}`;
+    case "grep_search": return `searching for "${query}"`;
+    case "glob_files": return `finding ${query}`;
+    case "web_fetch": return `fetching ${shortPath(path)}`;
+    case "web_search": return `web search: "${query}"`;
+    case "spawn_subagents": return `spawning sub-subagents`;
+    case "browser_navigate": return `navigating to ${shortPath(path)}`;
+    case "browser_snapshot": return `taking page snapshot`;
+    case "memory_search": return `searching memory for "${query}"`;
+    default: return toolName;
   }
-  const execName = path.basename(process.execPath).toLowerCase();
-  const isGeneric = /^(node|bun)(\.exe)?$/.test(execName);
-  if (!isGeneric) return { command: process.execPath, args: [] };
-  return { command: "pi", args: [] };
+}
+
+function shortPath(p: string): string {
+  if (!p) return "?";
+  const parts = p.split("/");
+  return parts.slice(-2).join("/") || p;
+}
+
+function shortCmd(cmd: string): string {
+  if (!cmd) return "?";
+  const firstLine = cmd.split("\n")[0]!.trim();
+  return firstLine.length > 50 ? firstLine.slice(0, 47) + "…" : firstLine;
 }
 
 // ── core: run one subagent ─────────────────────────────────────────────────
@@ -63,6 +88,7 @@ function runOne(
   task: SubTask,
   index: number,
   signal?: AbortSignal,
+  onActivity?: (activity: SubActivity) => void,
 ): Promise<SubResult> {
   return new Promise((resolve) => {
     const result: SubResult = {
@@ -102,6 +128,21 @@ function runOne(
       let event: any;
       try { event = JSON.parse(line); } catch { return; }
 
+      // Report tool execution activity (live visibility)
+      if (event.type === "tool_execution_start" && event.toolName) {
+        const desc = describeTool(event.toolName, event.args ?? {});
+        onActivity?.({ index, toolName: event.toolName, description: desc });
+      }
+      if (event.type === "tool_execution_update" && event.toolName && event.partialResult) {
+        // Show tool progress (e.g., file read offset, download progress)
+        const detail = typeof event.partialResult === "string"
+          ? event.partialResult.slice(0, 40)
+          : "";
+        if (detail) {
+          onActivity?.({ index, toolName: event.toolName, description: `${event.toolName}: ${detail}` });
+        }
+      }
+
       // Track the last assistant message_end for the final output.
       if (event.type === "message_end" && event.message) {
         const msg = event.message as Message;
@@ -117,10 +158,10 @@ function runOne(
           }
           if (!result.model && msg.model) result.model = msg.model;
           if (msg.stopReason) result.stopReason = msg.stopReason;
-          // Collect final text
+          // Collect assistant text (append for multi-turn subagents)
           for (const part of msg.content) {
             if (part.type === "text") {
-              result.output = part.text;
+              result.output = result.output ? `${result.output}\n\n${part.text}` : part.text;
             }
           }
         }
@@ -170,6 +211,7 @@ async function runAll(
   cwd: string,
   signal?: AbortSignal,
   onProgress?: (done: number) => void,
+  onActivity?: (activity: SubActivity) => void,
 ): Promise<SubResult[]> {
   if (tasks.length === 0) return [];
   const limit = Math.max(1, Math.min(concurrency, tasks.length));
@@ -182,7 +224,7 @@ async function runAll(
       if (signal?.aborted) return;
       const current = nextIndex++;
       if (current >= tasks.length) return;
-      results[current] = await runOne(cwd, tasks[current], current, signal);
+      results[current] = await runOne(cwd, tasks[current], current, signal, onActivity);
       done++;
       onProgress?.(done);
     }
@@ -206,10 +248,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "context lean. Only the conclusions come back — not the intermediate steps.",
     promptSnippet: "delegate independent subtasks to parallel subagents",
     promptGuidelines: [
-      "Use spawn_subagents when work splits into independent chunks that don't depend on each other's output — fan them out in one call.",
       "Give each subagent a self-contained prompt: it cannot see this conversation, so include every fact, path, and constraint it needs.",
-      "Do NOT use it for a single linear task, or when subtasks must run in sequence.",
-      "Prefer it over doing many large reads/searches inline when you only need the conclusions, to save the main context window.",
       "When subagent results would be large (extensive code, long reports), set output_to_files: true to write results to temp files instead of bloating the main context window. Read files with Pi's built-in read tool when you need the full output.",
     ],
     parameters: Type.Object({
@@ -249,11 +288,56 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const tasks: SubTask[] = (params.tasks as SubTask[]) ?? [];
       if (tasks.length === 0) return text("No tasks provided.");
 
-      const concurrency = Math.max(1, params.max_concurrency ?? 4);
+      const concurrency = Math.min(16, Math.max(1, params.max_concurrency ?? 4));
       const total = tasks.length;
       const label = total === 1 ? "subagent" : "subagents";
 
+      // Show visible notification in the chat + status bar
+      ctx.ui.notify(`🚀 Spawning ${total} ${label}…`, "info");
       ctx.ui.setStatus(`${total} ${label} running…`);
+
+      // Live activity widget — compact single-line indicator of subagent progress.
+      // Detailed results are in the chat output; this is just an at-a-glance widget.
+      const activityLog = new Map<number, string>();
+      // Seed with prompt summaries so the user can inspect them at a glance
+      for (let i = 0; i < tasks.length; i++) {
+        const preview = tasks[i].prompt.length > 100
+          ? tasks[i].prompt.slice(0, 97) + "…"
+          : tasks[i].prompt;
+        activityLog.set(i, `prompt: ${preview}`);
+      }
+      let doneCount = 0;
+      const renderWidget = () => {
+        if (activityLog.size === 0) return;
+        const sorted = [...activityLog.entries()].sort(([a], [b]) => a - b);
+        const termWidth = process.stdout.columns ?? 80;
+        const prefix = `⟳ ${doneCount}/${total} | `;
+        // Very narrow terminal — just the count
+        if (termWidth < prefix.length + 10) {
+          ctx.ui.setWidget("subagents", [`⟳ ${doneCount}/${total}`]);
+          return;
+        }
+        // Compact single line: ⟳ done/total | #1 desc | #2 desc …
+        let line = prefix;
+        let remaining = termWidth - prefix.length;
+        let first = true;
+        for (const [idx, desc] of sorted) {
+          const entry = `#${idx + 1} ${desc}`;
+          const sep = first ? "" : " | ";
+          if (remaining >= sep.length + 4) {
+            const max = remaining - sep.length;
+            const shown = entry.length <= max ? entry : entry.slice(0, max - 1) + "…";
+            line += sep + shown;
+            remaining -= sep.length + shown.length;
+            first = false;
+          } else {
+            break;
+          }
+        }
+        ctx.ui.setWidget("subagents", [line]);
+      };
+      renderWidget(); // show prompts immediately
+
       try {
         const results = await runAll(
           tasks,
@@ -261,16 +345,25 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           ctx.cwd,
           signal,
           (done) => {
+            doneCount = done;
             const icon = done < total ? "⟳" : "✓";
             ctx.ui.setStatus(`${icon} ${done}/${total} ${label} finished`);
+            renderWidget();
             onUpdate?.({
               content: [{ type: "text", text: `Subagents finished: ${done}/${total}` }],
             });
+          },
+          (activity) => {
+            activityLog.set(activity.index, activity.description);
+            renderWidget();
           },
         );
 
         // Sort by original index
         results.sort((a, b) => a.index - b.index);
+
+        // Keep the final widget state visible for 2s, then clear
+        setTimeout(() => ctx.ui.setWidget("subagents", undefined), 2000);
 
         const body = results
           .map((r) => {
@@ -282,7 +375,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           .join("\n\n---\n\n");
 
         const resultBody = truncate(body, 40_000);
+
+        // Clear status bar, show completion notification
         ctx.ui.setStatus(undefined);
+        const icon = results.every((r) => r.exitCode === 0) ? "✓" : "⚠";
+        ctx.ui.notify(`${icon} ${results.length}/${total} ${label} completed`, "info");
 
         // ── Accumulate subagent LLM usage into the tracker so the ──
         // ── main footer can show the combined total.               ──
@@ -348,6 +445,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         });
       } catch (_err) {
         ctx.ui.setStatus(undefined);
+        ctx.ui.setWidget("subagents", undefined);
         throw _err;
       }
     },

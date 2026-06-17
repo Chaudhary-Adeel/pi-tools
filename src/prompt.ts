@@ -30,22 +30,7 @@ Parallelism:
 - Each subagent prompt must stand alone: it can't see this conversation — include every path, fact, and constraint it needs. Only conclusions come back.
 - Don't spawn subagents for a single linear task or for steps that must run in order.
 - For large subagent results (file analysis, code reviews, extensive reports), use output_to_files: true so results are written to temp files instead of filling up the main context window. Read the files with Pi's built-in read tool when you need the full output.
-
-Tools:
-- web_search to find current info, then web_fetch to read a result.
-- read_file to read text files with line numbers and offset/limit. Pi's built-in read handles images and binary.
-- Pi's built-in edit for surgical string replacements; write for new files / full rewrites.
-- Pi's built-in bash for builds, tests, git — non-interactive only (redirect or pass -y flags).
-- grep_search (regex over contents) and glob_files (find by name) to navigate code.
 - ask_user ONLY when blocked on a decision that is genuinely the user's to make; otherwise pick a sensible default and proceed.
-
-Browser (Chrome DevTools Protocol):
-- Launch Chrome with --remote-debugging-port=9222. Any Chromium browser works.
-- browser_snapshot returns the accessibility tree — the most token-efficient way to "see" a page. Prefer it over fetching HTML.
-- browser_console shows page errors, warnings, and logs.
-- browser_evaluate runs arbitrary JS in the page and returns JSON-serializable values.
-- browser_click and browser_type target elements by CSS selector or visible text.
-- browser_screenshot captures a PNG of the current viewport.
 
 Verify before claiming done: run the build/tests when you changed code, and report failures honestly with the output.
 
@@ -53,9 +38,7 @@ Memory & persistence:
 - Your project memory lives in .pi/memory/system/*.md (conventions, commands, progress). These files are injected into context at session start — read and maintain them.
 - Track your progress in .pi/memory/system/progress.md: update the checklist after each step, log decisions with rationale, list next steps.
 - When you discover patterns or make important decisions, save them to .pi/memory/learnings/<topic>.md with a YAML frontmatter description.
-- This is your long-term memory across sessions — use it so you don't forget context.
-- Use memory_map tool to inspect your memory footprint, check token budget, or regenerate the memory-map.md index.
-- The user can type /memory for an interactive dashboard of everything you remember.
+- Use memory_map to inspect your memory footprint, check token budget, or regenerate the index. Use memory_search to search across all memory files.
 `.trim();
 
 export function registerPrompt(pi: ExtensionAPI): void {

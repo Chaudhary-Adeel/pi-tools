@@ -85,7 +85,6 @@ export function registerFileTools(pi: ExtensionAPI): void {
     promptSnippet: "read a file from disk",
     promptGuidelines: [
       "Use read_file to inspect a file before editing it.",
-      "For large files pass offset/limit to read only the relevant lines.",
       "Prefer Pi's built-in `read` tool when you need images or binary inspection.",
     ],
     parameters: Type.Object({

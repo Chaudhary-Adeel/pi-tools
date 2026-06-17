@@ -8,18 +8,18 @@
 
 | Category | Files | Size | Tokens (est.) |
 |----------|------:|-----:|-------------:|
-| 🧠 **System Memory** (injected each turn) | 4 | 2.6 KB | ~658 |
+| 🧠 **System Memory** (injected each turn) | 4 | 4.8 KB | ~1,211 |
 | 📚 **Learnings** (on-demand) | 4 | 3.2 KB | ~803 |
-| **Total** | 8 | 5.7 KB | ~1,461 |
+| **Total** | 8 | 7.9 KB | ~2,014 |
 
-**Token budget:** 4,000 tokens | **Budget used:** 16.4%
+**Token budget:** 4,000 tokens | **Budget used:** 30.3%
 
 ## 🧠 System Memory (always injected)
 
 ### `system/progress.md`
 
 - **Description:** Current task progress, checklist, decisions, and next steps
-- **Priority:** 0  |  **Size:** 922 B  |  **Tokens:** ~230
+- **Priority:** 0  |  **Size:** 3.1 KB  |  **Tokens:** ~783
 - **Path:** `/Users/adeel/Downloads/pi-tools/.pi/memory/system/progress.md`
 
 ### `system/conventions.md`
@@ -49,11 +49,11 @@
 
 ## 📋 Current Progress
 
-- **Task:** Add /memory command and memory maps package
+- **Task:** Memory System Audit & Full Fix (Phases 1–3)
 - **Status:** done
-- **Checklist:** 7/7 done
+- **Checklist:** 15/15 done
 - **Open decisions:** 2
-- **Next steps:** 4
+- **Next steps:** 3
 
 ## 🗺️ Memory Topology
 
@@ -61,16 +61,15 @@
 .pi/memory/
 ├── memory-map.md          ← this file
 ├── system/                ← injected into context every turn
-│   ├── system/progress.md
-│   ├── system/conventions.md
-│   ├── system/commands.md
-│   ├── system/persona.md
-│   └── progress.md         ← task tracking
+│   ├── progress.md
+│   ├── conventions.md
+│   ├── commands.md
+│   ├── persona.md
 └── learnings/             ← loaded on-demand by agent
-    ├── learnings/child-process-survival.md
-    ├── learnings/pi-tui-terminal-dimensions.md
-    ├── learnings/pi-tui-theme-colors.md
-    ├── learnings/subagent-token-reconciliation.md
+    ├── child-process-survival.md
+    ├── pi-tui-terminal-dimensions.md
+    ├── pi-tui-theme-colors.md
+    ├── subagent-token-reconciliation.md
 ```
 
 ## 💡 Management Tips
@@ -79,4 +78,4 @@
 - The agent can read/write memory files with normal `read`/`edit`/`write` tools.
 
 ---
-*Map generated 2026-06-11T20:08:11.644Z*
+*Map generated 2026-06-17T16:29:08.764Z*

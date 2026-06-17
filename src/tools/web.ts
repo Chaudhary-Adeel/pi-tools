@@ -2,16 +2,49 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate, htmlToText } from "../lib/shared.ts";
+import { text, errorText, truncate, htmlToText, formatBytes } from "../lib/shared.ts";
 
 const UA =
   "Mozilla/5.0 (compatible; pi-coding-toolkit/0.1; +https://pi.dev)";
 
-/** Format a byte count for human reading. */
-function fmtSize(n: number): string {
-  if (n < 1000) return `${n}B`;
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}KB`;
-  return `${(n / 1_000_000).toFixed(1)}MB`;
+// ── SSRF protection ──────────────────────────────────────────────────────────
+
+const PRIVATE_IPV4 = [
+  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+  /^192\.168\.\d{1,3}\.\d{1,3}$/,
+  /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^169\.254\.\d{1,3}\.\d{1,3}$/,
+  /^0\.0\.0\.0$/,
+];
+
+function isPrivateHost(hostname: string): boolean {
+  for (const re of PRIVATE_IPV4) {
+    if (re.test(hostname)) return true;
+  }
+  // IPv6 loopback / link-local / unique-local
+  if (hostname === "::1" || hostname === "::") return true;
+  if (/^fc[0-9a-f]{2}:/i.test(hostname)) return true; // fc00::/7
+  if (/^fd[0-9a-f]{2}:/i.test(hostname)) return true; // fd00::/8
+  if (/^fe80:/i.test(hostname)) return true;           // fe80::/10
+  return false;
+}
+
+/** Validate a URL for SSRF — returns null if OK, error message string if blocked. */
+function validateUrl(rawUrl: string): string | null {
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    return `Refusing to fetch non-http(s) URL: ${rawUrl}`;
+  }
+  let hostname: string;
+  try {
+    hostname = new URL(rawUrl).hostname;
+  } catch {
+    return `Invalid URL: ${rawUrl}`;
+  }
+  if (isPrivateHost(hostname)) {
+    return `Refusing to fetch URL targeting private/reserved IP: ${hostname}`;
+  }
+  return null;
 }
 
 export function registerWebTools(pi: ExtensionAPI): void {
@@ -23,7 +56,6 @@ export function registerWebTools(pi: ExtensionAPI): void {
       "Use for reading docs, articles, API responses, or any single web page.",
     promptSnippet: "fetch a web page or HTTP resource as text",
     promptGuidelines: [
-      "Use web_fetch to read a specific URL the user gave you or that web_search returned.",
       "It strips HTML to plain text and truncates very large pages — ask for a narrower URL if you need a specific section.",
     ],
     parameters: Type.Object({
@@ -43,9 +75,8 @@ export function registerWebTools(pi: ExtensionAPI): void {
     }),
     async execute(_id, params, signal) {
       const { url, max_chars, raw } = params;
-      if (!/^https?:\/\//i.test(url)) {
-        return errorText(`Refusing to fetch non-http(s) URL: ${url}`);
-      }
+      const urlError = validateUrl(url);
+      if (urlError) return errorText(urlError);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -93,7 +124,7 @@ export function registerWebTools(pi: ExtensionAPI): void {
       const isHtml = d?.isHtml as boolean | undefined;
       const kind = isHtml ? "html→text" : ct.split(";")[0] || "unknown";
       let summary = theme.fg("success", "✓ ") + theme.fg("muted", url);
-      summary += "  " + theme.fg("dim", `${fmtSize(bytes ?? chars ?? 0)}`);
+      summary += "  " + theme.fg("dim", `${formatBytes(bytes ?? chars ?? 0)}`);
       summary += "  " + theme.fg("dim", kind);
       if (expanded) {
         const preview = result.content?.[0]?.text ?? "";
@@ -117,7 +148,6 @@ export function registerWebTools(pi: ExtensionAPI): void {
     promptSnippet: "search the web for current information",
     promptGuidelines: [
       "Use web_search when you need information you don't have or that may have changed recently.",
-      "Then use web_fetch on the most promising result URL to read the details.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query." }),

@@ -8,7 +8,7 @@
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { text, errorText } from "../lib/shared.ts";
+import { text, errorText, formatBytes } from "../lib/shared.ts";
 import {
   computeFootprint,
   computeStats,
@@ -22,13 +22,7 @@ import { ensureMemoryDirs } from "../lib/memory.ts";
 
 // ── formatting ────────────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatFootprintForAgent(fp: MemoryFootprint): string {
+function formatFootprintForAgent(fp: MemoryFootprint, stats?: MemoryStats): string {
   const lines: string[] = [];
   lines.push("## 🧠 Agent Memory Footprint");
   lines.push("");
@@ -105,7 +99,8 @@ function formatFootprintForAgent(fp: MemoryFootprint): string {
   }
 
   // Footprint line
-  lines.push(`> \`${formatFootprintLine(computeStats(fp.memoryRoot ?? ""))}\``);
+  const s = stats ?? computeStats(fp.memoryRoot ?? "");
+  lines.push(`> \`${formatFootprintLine(s)}\``);
 
   return lines.join("\n");
 }
@@ -124,7 +119,6 @@ export function registerMemoryMapTool(pi: ExtensionAPI): void {
     promptSnippet: "Inspect or manage agent memory (footprint, map, budget)",
     promptGuidelines: [
       "Use memory_map to check the agent's memory footprint before reading/writing memory files.",
-      "Use memory_map with action 'generate' to rebuild the memory-map.md index after adding new memory files.",
       "Use memory_map with action 'stats' when you only need the numbers (files, sizes, budget).",
     ],
     parameters: Type.Object({
@@ -140,9 +134,10 @@ export function registerMemoryMapTool(pi: ExtensionAPI): void {
       switch (action) {
         case "view": {
           const fp = computeFootprint(cwd);
-          return text(formatFootprintForAgent(fp), {
+          const stats = computeStats(cwd);
+          return text(formatFootprintForAgent(fp, stats), {
             action: "view",
-            stats: computeStats(cwd),
+            stats,
           });
         }
         case "generate": {

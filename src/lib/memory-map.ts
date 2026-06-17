@@ -20,6 +20,7 @@ import {
   type MemoryFile,
   type Progress,
 } from "./memory.ts";
+import { formatBytes } from "./shared.ts";
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -69,9 +70,19 @@ export interface MemoryStats {
   budgetUtilization: number;
 }
 
-// ── footprint computation ─────────────────────────────────────────────────
+// ── token budget ──────────────────────────────────────────────────────────
 
-const TOKEN_BUDGET = 4000; // matches formatSystemMemory limit
+/** Read token budget from PI_MEMORY_TOKEN_BUDGET env var, fall back to 4000. */
+export function getTokenBudget(): number {
+  const env = process.env.PI_MEMORY_TOKEN_BUDGET;
+  if (env) {
+    const parsed = parseInt(env, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 4000;
+}
+
+// ── footprint computation ─────────────────────────────────────────────────
 
 /** Estimate tokens from character count (rough: ~4 chars/token). */
 export function estimateTokens(text: string): number {
@@ -79,7 +90,8 @@ export function estimateTokens(text: string): number {
 }
 
 /** Compute the full memory footprint for a project. */
-export function computeFootprint(cwd: string, tokenBudget = TOKEN_BUDGET): MemoryFootprint {
+export function computeFootprint(cwd: string, tokenBudget?: number): MemoryFootprint {
+  const budget = tokenBudget ?? getTokenBudget();
   const root = findMemoryRoot(cwd);
   if (!root) {
     return {
@@ -89,7 +101,7 @@ export function computeFootprint(cwd: string, tokenBudget = TOKEN_BUDGET): Memor
       totalTokens: 0,
       injectedBytes: 0,
       injectedTokens: 0,
-      tokenBudget,
+      tokenBudget: budget,
       budgetUtilization: 0,
       hasMemory: false,
       memoryRoot: null,
@@ -122,8 +134,8 @@ export function computeFootprint(cwd: string, tokenBudget = TOKEN_BUDGET): Memor
     totalTokens,
     injectedBytes,
     injectedTokens,
-    tokenBudget,
-    budgetUtilization: injectedTokens > 0 ? (injectedTokens / tokenBudget) * 100 : 0,
+    tokenBudget: budget,
+    budgetUtilization: injectedTokens > 0 ? (injectedTokens / budget) * 100 : 0,
     hasMemory: true,
     memoryRoot: root,
     progress,
@@ -131,7 +143,7 @@ export function computeFootprint(cwd: string, tokenBudget = TOKEN_BUDGET): Memor
 }
 
 /** Compute compact stats (no file lists). */
-export function computeStats(cwd: string, tokenBudget = TOKEN_BUDGET): MemoryStats {
+export function computeStats(cwd: string, tokenBudget?: number): MemoryStats {
   const fp = computeFootprint(cwd, tokenBudget);
   return {
     systemCount: fp.systemFiles.length,
@@ -156,7 +168,7 @@ const MAP_HEADER = `# Memory Map
 `;
 
 /** Generate a human-readable memory map Markdown file. */
-export function generateMemoryMap(cwd: string, tokenBudget = TOKEN_BUDGET): string {
+export function generateMemoryMap(cwd: string, tokenBudget?: number): string {
   const fp = computeFootprint(cwd, tokenBudget);
   if (!fp.hasMemory) {
     return MAP_HEADER + "\n⚠️ No memory directory found. Run `ensureMemoryDirs(cwd)` or create `.pi/memory/`.\n";
@@ -240,13 +252,14 @@ export function generateMemoryMap(cwd: string, tokenBudget = TOKEN_BUDGET): stri
   lines.push(`├── memory-map.md          ← this file`);
   lines.push(`├── system/                ← injected into context every turn`);
   for (const f of fp.systemFiles) {
-    lines.push(`│   ├── ${f.relPath}`);
+    const name = path.basename(f.relPath);
+    lines.push(`│   ├── ${name}`);
   }
   if (fp.systemFiles.length === 0) lines.push("│   (empty)");
-  lines.push(`│   └── progress.md         ← task tracking`);
   lines.push(`└── learnings/             ← loaded on-demand by agent`);
   for (const f of fp.learningFiles) {
-    lines.push(`    ├── ${f.relPath}`);
+    const name = path.basename(f.relPath);
+    lines.push(`    ├── ${name}`);
   }
   if (fp.learningFiles.length === 0) lines.push("    (empty)");
   lines.push("```");
@@ -306,12 +319,6 @@ export function updateMemoryMap(cwd: string): string {
 }
 
 // ── formatting ────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 /** Format a compact one-line view of memory footprint. */
 export function formatFootprintLine(stats: MemoryStats): string {
