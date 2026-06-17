@@ -285,27 +285,33 @@ export function registerServeCommand(pi: ExtensionAPI): void {
       }
 
       // TUI panel
-      const result = await ctx.ui.custom((tui, theme, keybindings, done) => {
+      const result = await ctx.ui.custom((tui, theme, _keybindings, done) => {
+        let lastWidth = tui.terminal.columns;
+        let lastHeight = tui.terminal.rows;
+
         const render = (): string[] => renderPanel(state, theme);
-
-        const resize = () => {
-          tui.setContent(render());
-        };
-
-        keybindings.add("q", () => done(null));
-        keybindings.add("escape", () => done(null));
-        resize();
 
         // Periodic refresh for request counter
         const interval = setInterval(() => {
-          tui.setContent(render());
+          tui.requestRender();
         }, 1000);
 
         return {
+          render(w: number) {
+            if (w !== lastWidth) lastWidth = w;
+            const currentH = tui.terminal.rows;
+            if (currentH !== lastHeight) lastHeight = currentH;
+            return render();
+          },
+          invalidate() {},
+          handleInput(data: string) {
+            if (data === "q" || data === "Q" || data === "\x1b") {
+              done(null);
+            }
+          },
           dispose() {
             clearInterval(interval);
           },
-          onResize: resize,
         };
       });
 
