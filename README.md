@@ -20,8 +20,9 @@ Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
 | `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context) |
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
+| `memory_search` | Search across all memory files (system + learnings) for a query |
 
-**Browser (CDP):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps.
+**Browser (CDP):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps. SSRF-protected (blocks `file://`, private/reserved IPs).
 
 For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 
@@ -29,8 +30,11 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 
 | Command | What it does |
 |---------|--------------|
-| `/memory` | Interactive TUI dashboard — like looking inside Pi's brain. See what's stored, token budget gauge, progress tracker. Tabs: tree, system, learnings, progress |
+| `/memory` | Interactive TUI dashboard — memory footprint, token budget gauge, progress tracker. Tabs: tree, system, learnings, progress |
 | `/learn` | Distill the current session into reusable memory — writes durable learnings to `.pi/memory/learnings/` |
+| `/doctor` | Memory health audit — scored checklist of issues, duplicates, and optimization suggestions |
+| `/consolidate` | Reorganize memory learnings — merge duplicates, archive stale entries, clean up |
+| `/init` | Initialize project memory from codebase analysis (framework, scripts, conventions) |
 | `/skill:browser` | Loads browser automation instructions into context |
 
 **Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
@@ -90,7 +94,13 @@ npm install
 
 ## Config
 
+**Environment variables:**
 - `TAVILY_API_KEY` — enables Tavily-backed `web_search` (falls back to DuckDuckGo otherwise)
+- `PI_MEMORY_TOKEN_BUDGET` — memory injection token cap (default: 4000)
+
+**Flags** (pass on `pi` invocation):
+- `--no-auto-learn` — disable automatic learning capture on session end
+- `--memory-git` — auto-commit `.pi/memory/` changes to git after each turn
 
 ## Browser Setup
 
@@ -107,21 +117,31 @@ pi-tools/
 ├── package.json
 ├── README.md
 ├── skills/browser/              # browser automation skill
+├── tests/                       # test suite
+│   ├── memory.test.ts
+│   └── memory-map.test.ts
 ├── .pi/memory/                  # agent's persistent memory
 │   ├── memory-map.md            #   auto-generated index
 │   ├── system/                  #   injected every turn
 │   └── learnings/               #   on-demand
 └── src/
-    ├── index.ts                 # entry point
-    ├── prompt.ts                # operating prompt
+    ├── index.ts                 # entry point: registers tools, commands, hooks
+    ├── prompt.ts                # token-efficient operating prompt
     ├── commands/
-    │   └── memory-command.ts    # /memory TUI dashboard
+    │   ├── memory-command.ts    # /memory TUI dashboard
+    │   ├── learn-command.ts     # /learn — distill session
+    │   ├── doctor-command.ts    # /doctor — memory health audit
+    │   ├── consolidate-command.ts # /consolidate — reorganize learnings
+    │   └── init-command.ts      # /init — bootstrap memory
     ├── lib/
-    │   ├── memory.ts            # two-tier memory system
+    │   ├── memory.ts            # two-tier memory system + auto-bootstrap
     │   ├── memory-map.ts        # footprint computation + map generation
     │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory injection
     │   ├── browser-cdp.ts       # zero-dep CDP client
-    │   └── shared.ts            # helpers
+    │   ├── learn.ts             # session distillation + auto-capture
+    │   ├── subagent-tokens.ts   # cross-process subagent token tracking
+    │   ├── walk.ts              # directory tree walker
+    │   └── shared.ts            # shared helpers (formatBytes, getPiCommand, etc.)
     └── tools/
         ├── web.ts               # web_fetch, web_search
         ├── files.ts             # read_file
@@ -129,6 +149,7 @@ pi-tools/
         ├── ask.ts               # ask_user
         ├── subagents.ts         # spawn_subagents
         ├── memory.ts            # memory_map
+        ├── memory-search.ts     # memory_search
         ├── browser.ts           # 7 CDP browser tools
         ├── builtins.ts          # compact edit/write output
         └── subagent-review.ts   # Ctrl+O prompt editor
