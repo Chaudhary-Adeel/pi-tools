@@ -30,6 +30,7 @@ import { registerLearnCommand } from "./commands/learn-command.ts";
 import { registerDoctorCommand } from "./commands/doctor-command.ts";
 import { registerConsolidateCommand } from "./commands/consolidate-command.ts";
 import { registerInitCommand } from "./commands/init-command.ts";
+import { registerServeCommand } from "./commands/serve-command.ts";
 import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
 
 const GIT_COMMIT_RE = /\bgit\s+commit\b/;
@@ -73,6 +74,9 @@ export default function (pi: ExtensionAPI): void {
 
   // /init command — initialize project memory from codebase analysis.
   registerInitCommand(pi);
+
+  // /serve command — HTTP API + bore tunnel for mobile/remote access.
+  registerServeCommand(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {

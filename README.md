@@ -35,6 +35,7 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 | `/doctor` | Memory health audit — scored checklist of issues, duplicates, and optimization suggestions |
 | `/consolidate` | Reorganize memory learnings — merge duplicates, archive stale entries, clean up |
 | `/init` | Initialize project memory from codebase analysis (framework, scripts, conventions) |
+| `/serve` | Start HTTP API server + bore tunnel for mobile/remote access |
 | `/skill:browser` | Loads browser automation instructions into context |
 
 **Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
@@ -132,7 +133,8 @@ pi-tools/
     │   ├── learn-command.ts     # /learn — distill session
     │   ├── doctor-command.ts    # /doctor — memory health audit
     │   ├── consolidate-command.ts # /consolidate — reorganize learnings
-    │   └── init-command.ts      # /init — bootstrap memory
+    │   ├── init-command.ts      # /init — bootstrap memory
+    │   └── serve-command.ts     # /serve — HTTP API + bore tunnel
     ├── lib/
     │   ├── memory.ts            # two-tier memory system + auto-bootstrap
     │   ├── memory-map.ts        # footprint computation + map generation
