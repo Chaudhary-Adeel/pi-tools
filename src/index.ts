@@ -39,6 +39,7 @@ import { registerGitHubExploreTool } from "./tools/github-explore.ts";
 import { registerCodeReferencesTool } from "./tools/code-references.ts";
 import { registerTaskTool } from "./tools/tasks.ts";
 import { getGreetingName, getGitIdentity } from "./lib/config.ts";
+import { registerDelegationHarness } from "./lib/harness-register.ts";
 import { getRepoName } from "./lib/shared.ts";
 import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
 
@@ -101,6 +102,10 @@ export default function (pi: ExtensionAPI): void {
 
   // /newTask — kick off a task in a fresh subagent (standard or background).
   registerNewTaskCommand(pi);
+
+  // Delegation harness — active subagent-utilization steering: prompt-shape
+  // hints, research-streak nudges, context-pressure nudges, /harness stats.
+  registerDelegationHarness(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {

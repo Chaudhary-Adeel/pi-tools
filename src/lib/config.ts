@@ -21,6 +21,9 @@ export interface PiToolsConfig {
   /** Model passed to subagent subprocesses (`--model`). Pick a lighter/cheaper
    *  model than the main session — subagents do focused, disposable work. */
   subagentModel?: string;
+  /** Delegation harness (auto subagent-utilization steering). "off"/"false"
+   *  disables hints and nudges. Default: on. */
+  autoDelegate?: string | boolean;
 }
 
 export const CONFIG_DEFAULTS: Required<Pick<PiToolsConfig, "greetingName" | "gitName" | "gitEmail">> = {
@@ -99,4 +102,12 @@ export function getGitIdentity(cwd: string): { name: string; email: string } {
 /** Model for subagent subprocesses. undefined = inherit pi's default model. */
 export function getSubagentModel(cwd: string): string | undefined {
   return process.env.PI_SUBAGENT_MODEL || loadConfig(cwd).subagentModel || undefined;
+}
+
+/** Whether the delegation harness (hints + nudges) is enabled. Default: on. */
+export function isAutoDelegateEnabled(cwd: string): boolean {
+  const v = loadConfig(cwd).autoDelegate;
+  if (v === false) return false;
+  if (typeof v === "string" && /^(off|false|0|no|disabled)$/i.test(v.trim())) return false;
+  return true;
 }
