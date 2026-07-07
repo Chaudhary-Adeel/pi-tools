@@ -3,7 +3,7 @@
 // Registers a complete set of coding tools plus a token-efficient operating
 // prompt. Loaded by Pi via the `pi.extensions` field in package.json.
 //
-// Also sets a custom footer showing "Muhammad Adeel Chaudhary" in yellow.
+// Also sets a custom footer showing the configured greeting name (see /config).
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -31,6 +31,15 @@ import { registerDoctorCommand } from "./commands/doctor-command.ts";
 import { registerConsolidateCommand } from "./commands/consolidate-command.ts";
 import { registerInitCommand } from "./commands/init-command.ts";
 import { registerServeCommand } from "./commands/serve-command.ts";
+import { registerConfigCommand } from "./commands/config-command.ts";
+import { registerConnectorsCommand } from "./commands/connectors-command.ts";
+import { registerAgentsCommand } from "./commands/agents-command.ts";
+import { registerNewTaskCommand } from "./commands/new-task-command.ts";
+import { registerGitHubExploreTool } from "./tools/github-explore.ts";
+import { registerCodeReferencesTool } from "./tools/code-references.ts";
+import { registerTaskTool } from "./tools/tasks.ts";
+import { getGreetingName, getGitIdentity } from "./lib/config.ts";
+import { getRepoName } from "./lib/shared.ts";
 import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
 
 const GIT_COMMIT_RE = /\bgit\s+commit\b/;
@@ -45,6 +54,9 @@ export default function (pi: ExtensionAPI): void {
   registerSubagentTool(pi); //   spawn_subagents
   registerCompactBuiltins(pi); // compact edit/write output
   registerBrowserTools(pi); //  browser_navigate, snapshot, click, type, evaluate, console, screenshot
+  registerGitHubExploreTool(pi); // github_explore — search/read public GitHub repos
+  registerCodeReferencesTool(pi); // code_references — progressive code understanding
+  registerTaskTool(pi); //       tasks — structured session task list
 
   // Operating prompt (token efficiency + parallelism/subagent strategy).
   registerPrompt(pi);
@@ -77,6 +89,18 @@ export default function (pi: ExtensionAPI): void {
 
   // /serve command — HTTP API + bore tunnel for mobile/remote access.
   registerServeCommand(pi);
+
+  // /config — configure git identity, greeting name, subagent model.
+  registerConfigCommand(pi);
+
+  // /connectors — list this package's connectors (tools, commands, integrations).
+  registerConnectorsCommand(pi);
+
+  // /agents — show subagent setup: model, presets, nesting policy.
+  registerAgentsCommand(pi);
+
+  // /newTask — kick off a task in a fresh subagent (standard or background).
+  registerNewTaskCommand(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {
@@ -117,15 +141,16 @@ export default function (pi: ExtensionAPI): void {
   // ── Git identity injection ──────────────────────────────────────────
 
   pi.on("tool_call", async (event, ctx) => {
-    // ── Inject adeel.bot identity into git commits ──────────────────────
+    // ── Inject configured bot identity into git commits (see /config) ────
 
     if (isToolCallEventType("bash", event)) {
       const cmd = event.input.command;
       // Match 'git commit' but NOT 'git -c' (already configured)
       if (GIT_COMMIT_RE.test(cmd) && !/git\s+-c\s+user\.name/.test(cmd)) {
+        const git = getGitIdentity(ctx.cwd);
         event.input.command = cmd.replace(
           GIT_COMMIT_RE,
-          "git -c user.name='adeel.bot' -c user.email='adeel.bot@suadeo.net' commit",
+          `git -c user.name='${git.name}' -c user.email='${git.email}' commit`,
         );
       }
     }
@@ -161,9 +186,10 @@ export default function (pi: ExtensionAPI): void {
     } catch {
       // changes exist — stage and commit
       try {
+        const git = getGitIdentity(ctx.cwd);
         execSync("git add .pi/memory/", { cwd: ctx.cwd });
         execSync(
-          "git -c user.name='adeel.bot' -c user.email='adeel.bot@suadeo.net' commit -m 'chore(memory): update project memory files'",
+          `git -c user.name='${git.name}' -c user.email='${git.email}' commit -m 'chore(memory): update project memory files'`,
           { cwd: ctx.cwd },
         );
       } catch {
@@ -185,6 +211,9 @@ export default function (pi: ExtensionAPI): void {
   // ── custom footer with progress bar and polished layout ────────────────────
 
   pi.on("session_start", (_event, ctx) => {
+    // Resolved once per session — shelling out to git per render would be wasteful.
+    const repoName = getRepoName(ctx.cwd);
+
     ctx.ui.setFooter((tui, theme, footerData) => {
       const unsub = footerData.onBranchChange(() => tui.requestRender());
 
@@ -250,9 +279,10 @@ export default function (pi: ExtensionAPI): void {
           // ── build left-side parts ────────────────────────────────────────
           const parts: string[] = [];
 
-          // Git branch (accent color)
+          // Repo + git branch (accent color), e.g. "🌿 pi-tools:main"
           const branch = footerData.getGitBranch();
-          if (branch) parts.push(theme.fg("accent", theme.bold(`🌿 ${branch}`)));
+          const repoLabel = branch ? `${repoName}:${branch}` : repoName;
+          if (repoLabel) parts.push(theme.fg("accent", theme.bold(`🌿 ${repoLabel}`)));
 
           // Token I/O (compact: ↑ / ↓ symbols) — includes subagent tokens
           parts.push(theme.fg("dim", `${theme.fg("success", "↑")}${fmt(input)} ${theme.fg("error", "↓")}${fmt(output)}`));
@@ -294,8 +324,8 @@ export default function (pi: ExtensionAPI): void {
           const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(modelLabel)));
           const topLine = truncateToWidth(left + pad + modelLabel, width);
 
-          // ── bottom line: credit on the right, in warning color ───────────
-          const name = theme.fg("warning", theme.bold("Muhammad Adeel Chaudhary"));
+          // ── bottom line: greeting name on the right (see /config) ────────
+          const name = theme.fg("warning", theme.bold(getGreetingName(ctx.cwd)));
           const padBottom = " ".repeat(Math.max(0, width - visibleWidth(name)));
           const bottomLine = truncateToWidth(padBottom + name, width);
 

@@ -5,7 +5,7 @@
 // subagents are launched.
 
 import { Container, Text, matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
-import type { Theme } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { KeybindingsManager } from "@earendil-works/pi-tui";
 
 // ── types ──────────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ import * as readline from "node:readline";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate } from "../lib/shared.ts";
+import { text, firstText, truncate } from "../lib/shared.ts";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -116,7 +116,7 @@ export function registerFileTools(pi: ExtensionAPI): void {
           linesRead: lines.length,
         });
       } catch (e) {
-        return errorText(`Cannot read ${shortPath(ctx, file)}: ${(e as Error).message}`);
+        throw new Error(`Cannot read ${shortPath(ctx, file)}: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme, _context) {
@@ -127,11 +127,10 @@ export function registerFileTools(pi: ExtensionAPI): void {
       if (args.limit) t += theme.fg("dim", ` +${args.limit}`);
       return new Text(t, 0, 0);
     },
-    renderResult(result, { expanded }, theme, _context) {
+    renderResult(result, { expanded }, theme, context) {
       const d = result.details as Record<string, unknown> | undefined;
-      if (result.isError) {
-        const msg = result.content?.[0]?.text ?? "Error";
-        return new Text(theme.fg("error", msg), 0, 0);
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const total = d?.totalLines as number | undefined;
       const start = d?.start as number | undefined;
@@ -142,7 +141,7 @@ export function registerFileTools(pi: ExtensionAPI): void {
       let summary = theme.fg("success", "✓ ") + theme.fg("muted", d?.path as string ?? "?");
       if (range) summary += "  " + theme.fg("dim", range);
       if (expanded) {
-        const preview = result.content?.[0]?.text ?? "";
+        const preview = firstText(result);
         const head = preview.split("\n").slice(0, 10).join("\n");
         summary += "\n" + theme.fg("dim", head);
         if (head.length < preview.length) summary += "\n" + theme.fg("dim", "…");

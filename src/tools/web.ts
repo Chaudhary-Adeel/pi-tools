@@ -2,7 +2,7 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate, htmlToText, formatBytes } from "../lib/shared.ts";
+import { text, firstText, truncate, htmlToText, formatBytes } from "../lib/shared.ts";
 
 const UA =
   "Mozilla/5.0 (compatible; pi-coding-toolkit/0.1; +https://pi.dev)";
@@ -76,7 +76,7 @@ export function registerWebTools(pi: ExtensionAPI): void {
     async execute(_id, params, signal) {
       const { url, max_chars, raw } = params;
       const urlError = validateUrl(url);
-      if (urlError) return errorText(urlError);
+      if (urlError) throw new Error(urlError);
       let res: Response;
       try {
         res = await fetch(url, {
@@ -85,7 +85,7 @@ export function registerWebTools(pi: ExtensionAPI): void {
           signal,
         });
       } catch (e) {
-        return errorText(`Network error fetching ${url}: ${(e as Error).message}`);
+        throw new Error(`Network error fetching ${url}: ${(e as Error).message}`);
       }
       const ct = res.headers.get("content-type") ?? "";
       const body = await res.text();
@@ -127,7 +127,7 @@ export function registerWebTools(pi: ExtensionAPI): void {
       summary += "  " + theme.fg("dim", `${formatBytes(bytes ?? chars ?? 0)}`);
       summary += "  " + theme.fg("dim", kind);
       if (expanded) {
-        const preview = result.content?.[0]?.text ?? "";
+        const preview = firstText(result);
         const head = preview.split("\n").slice(0, 6).join("\n");
         if (head.length < preview.length) {
           summary += "\n" + theme.fg("dim", head) + "\n" + theme.fg("dim", "…");

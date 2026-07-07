@@ -1,19 +1,26 @@
 // Small helpers shared across tools. No external deps — Node builtins only.
 
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 
-/** Wrap plain text into the ToolResult shape Pi expects. */
+/** Result shape returned by tool execute() — `details` is required in Pi ≥0.80. */
+export type ToolResult = AgentToolResult<unknown>;
+
+/** Wrap plain text into the AgentToolResult shape Pi expects. */
 export function text(s: string, details?: Record<string, unknown>): ToolResult {
   return { content: [{ type: "text", text: s }], details };
 }
 
-/** An error result. Prefer `throw new Error(...)` inside execute(), which Pi
- *  turns into an error result automatically; use this when you want to return
- *  a soft failure the model can recover from without aborting the turn. */
-export function errorText(s: string): ToolResult {
-  return { content: [{ type: "text", text: s }], isError: true };
+/** First text block of a tool result, for renderResult() implementations.
+ *  Content items are a TextContent | ImageContent union in Pi ≥0.80, so
+ *  renderers must narrow before touching `.text`. */
+export function firstText(result: AgentToolResult<unknown>, fallback = ""): string {
+  for (const part of result.content) {
+    if (part.type === "text") return part.text;
+  }
+  return fallback;
 }
 
 /** Format byte counts into human-readable strings. */
@@ -80,6 +87,25 @@ export function globToRegExp(glob: string): RegExp {
     }
   }
   return new RegExp("^" + re + "$", "i");
+}
+
+/** Repository name for the current working directory: the basename of the
+ *  origin remote URL when set, else the git toplevel dir, else the cwd. */
+export function getRepoName(cwd: string): string {
+  const run = (cmd: string): string | undefined => {
+    try {
+      return execSync(cmd, { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const remote = run("git remote get-url origin");
+  if (remote) {
+    const base = remote.split("/").pop() ?? remote;
+    return base.replace(/\.git$/, "");
+  }
+  const toplevel = run("git rev-parse --show-toplevel");
+  return path.basename(toplevel ?? cwd);
 }
 
 /** Resolve how to invoke the `pi` CLI for spawning subprocesses.

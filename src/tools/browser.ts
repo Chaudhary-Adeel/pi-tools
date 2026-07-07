@@ -13,7 +13,7 @@
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate } from "../lib/shared.ts";
+import { text, firstText, truncate } from "../lib/shared.ts";
 import { CDPClient, type ConsoleEntry } from "../lib/browser-cdp.ts";
 
 // ── SSRF / protocol safety ──────────────────────────────────────────────────
@@ -109,7 +109,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
     }),
     async execute(_id, params) {
       const urlError = validateBrowserUrl(params.url);
-      if (urlError) return errorText(urlError);
+      if (urlError) throw new Error(urlError);
       try {
         await ensureConnected(params.port);
         await getClient(params.port).navigate(params.url);
@@ -119,7 +119,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
           title: title ?? null,
         });
       } catch (e) {
-        return errorText(`Browser navigation failed: ${(e as Error).message}`);
+        throw new Error(`Browser navigation failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -127,10 +127,10 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       t += theme.fg("muted", args.url as string);
       return new Text(t, 0, 0);
     },
-    renderResult(result, _opts, theme) {
+    renderResult(result, _opts, theme, context) {
       const d = result.details as Record<string, unknown> | undefined;
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const title = (d?.title as string) ?? "?";
       let summary = theme.fg("success", "✓ ") + theme.fg("muted", d?.url as string ?? "?");
@@ -169,7 +169,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
         const tree = await getClient(params.port).snapshot(params.depth ?? 4);
         return text(tree, { depth: params.depth ?? 4 });
       } catch (e) {
-        return errorText(`Browser snapshot failed: ${(e as Error).message}`);
+        throw new Error(`Browser snapshot failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -177,11 +177,11 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       if (args.depth) t += theme.fg("dim", ` depth=${args.depth}`);
       return new Text(t, 0, 0);
     },
-    renderResult(result, { expanded }, theme) {
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+    renderResult(result, { expanded }, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
-      const preview = result.content?.[0]?.text ?? "";
+      const preview = firstText(result);
       const lines = preview.split("\n");
       const count = lines.filter((l) => l.trim()).length;
       let summary = theme.fg("success", "✓ ") + theme.fg("muted", `${count} elements`);
@@ -221,7 +221,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
         await getClient(params.port).click(params.selector);
         return text(`Clicked: "${params.selector}"`, { selector: params.selector });
       } catch (e) {
-        return errorText(`Browser click failed: ${(e as Error).message}`);
+        throw new Error(`Browser click failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -229,12 +229,12 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       t += theme.fg("muted", `"${args.selector as string}"`);
       return new Text(t, 0, 0);
     },
-    renderResult(result, _opts, theme) {
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+    renderResult(result, _opts, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       return new Text(
-        theme.fg("success", "✓ ") + theme.fg("muted", `Clicked "${result.details?.selector as string ?? "?"}"`),
+        theme.fg("success", "✓ ") + theme.fg("muted", `Clicked "${(result.details as Record<string, unknown> | undefined)?.selector as string ?? "?"}"`),
         0, 0,
       );
     },
@@ -270,7 +270,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
           text: params.text,
         });
       } catch (e) {
-        return errorText(`Browser type failed: ${(e as Error).message}`);
+        throw new Error(`Browser type failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -279,13 +279,13 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       t += theme.fg("dim", ` into ${args.selector as string}`);
       return new Text(t, 0, 0);
     },
-    renderResult(result, _opts, theme) {
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+    renderResult(result, _opts, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       return new Text(
         theme.fg("success", "✓ ") +
-          theme.fg("muted", `Typed "${result.details?.text as string ?? "?"}"`),
+          theme.fg("muted", `Typed "${(result.details as Record<string, unknown> | undefined)?.text as string ?? "?"}"`),
         0, 0,
       );
     },
@@ -329,7 +329,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
           resultType: typeof result,
         });
       } catch (e) {
-        return errorText(`Browser evaluate failed: ${(e as Error).message}`);
+        throw new Error(`Browser evaluate failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -338,14 +338,14 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       t += theme.fg("muted", expr.length > 80 ? expr.slice(0, 77) + "…" : expr);
       return new Text(t, 0, 0);
     },
-    renderResult(result, { expanded }, theme) {
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+    renderResult(result, { expanded }, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
-      const rtype = result.details?.resultType as string ?? "?";
+      const rtype = (result.details as Record<string, unknown> | undefined)?.resultType as string ?? "?";
       let summary = theme.fg("success", "✓ ") + theme.fg("dim", `(${rtype})`);
       if (expanded) {
-        const val = result.content?.[0]?.text ?? "";
+        const val = firstText(result);
         const preview = val.length > 300 ? val.slice(0, 297) + "…" : val;
         summary += " " + theme.fg("muted", preview);
       }
@@ -390,7 +390,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
           .join("\n");
         return text(truncate(formatted), { count: msgs.length, cleared: !!params.clear });
       } catch (e) {
-        return errorText(`Browser console read failed: ${(e as Error).message}`);
+        throw new Error(`Browser console read failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -398,14 +398,14 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
       if (args.clear) t += theme.fg("dim", " (clear)");
       return new Text(t, 0, 0);
     },
-    renderResult(result, { expanded }, theme) {
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+    renderResult(result, { expanded }, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
-      const count = result.details?.count as number ?? 0;
+      const count = (result.details as Record<string, unknown> | undefined)?.count as number ?? 0;
       let summary = theme.fg("success", "✓ ") + theme.fg("muted", `${count} message(s)`);
       if (expanded && count > 0) {
-        const preview = result.content?.[0]?.text ?? "";
+        const preview = firstText(result);
         const head = preview.split("\n").slice(0, 20).join("\n");
         summary += "\n" + theme.fg("dim", head);
         if (preview.split("\n").length > 20) summary += "\n" + theme.fg("dim", "…");
@@ -450,7 +450,7 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
           details: { format: "png" },
         };
       } catch (e) {
-        return errorText(`Browser screenshot failed: ${(e as Error).message}`);
+        throw new Error(`Browser screenshot failed: ${(e as Error).message}`);
       }
     },
     renderCall(args, theme) {
@@ -459,9 +459,9 @@ export function registerBrowserTools(pi: ExtensionAPI): void {
         0, 0,
       );
     },
-    renderResult(result, _opts, theme) {
-      if (result.isError) {
-        return new Text(theme.fg("error", result.content?.[0]?.text ?? "Error"), 0, 0);
+    renderResult(result, _opts, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const textPart = result.content?.find((c) => c.type === "text");
       const size = textPart?.text ?? "";

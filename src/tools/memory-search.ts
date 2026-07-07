@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { text, errorText } from "../lib/shared.ts";
+import { text } from "../lib/shared.ts";
 import { findMemoryRoot, parseMemoryFile } from "../lib/memory.ts";
 
 const MAX_OUTPUT = 5000;
@@ -153,7 +153,7 @@ export function registerMemorySearchTool(pi: ExtensionAPI): void {
       const query = (params.query as string).trim();
 
       if (!query) {
-        return errorText("Query must be a non-empty string.");
+        throw new Error("Query must be a non-empty string.");
       }
 
       const root = findMemoryRoot(cwd);
