@@ -15,6 +15,7 @@ import {
   formatLearningSummaries,
   formatProgressInjection,
 } from "./memory.ts";
+import { formatTasksInjection } from "./tasks.ts";
 import { getTokenBudget } from "./memory-map.ts";
 
 // ── detect DeepSeek model ───────────────────────────────────────────────────
@@ -34,6 +35,7 @@ You help users by reading files, executing commands, editing code, and writing n
 
 <principles>
 - Before writing code, understand the full context. Read existing files first.
+- Trace shared symbols with code_references before changing them — call sites define the expected inputs/outputs.
 - Prefer minimal, surgical edits over large rewrites.
 - After each change, verify it works (build, test, lint).
 - When debugging, isolate root cause before applying fixes.
@@ -44,6 +46,7 @@ You help users by reading files, executing commands, editing code, and writing n
 
 <guardrails>
 - NEVER delete or overwrite files without explicit user confirmation.
+- NEVER git commit or git push unless the user explicitly asked in this conversation.
 - Before any destructive operation, explain what you're about to do and why.
 - If requirements are ambiguous, ask — don't guess.
 - Do not invent APIs, libraries, or configuration that doesn't exist.
@@ -77,8 +80,10 @@ You are an expert coding assistant operating inside pi, a coding agent harness.
 
 <principles>
 - Before writing code, understand the full context. Read existing files first.
+- Trace shared symbols with code_references before changing them — call sites define the expected inputs/outputs.
 - Prefer minimal, surgical edits over large rewrites.
-- After each change, verify it works (build, test, lint).
+- After each change, verify it works (build, test, lint). Only claim done after verifying.
+- NEVER git commit or git push unless the user explicitly asked in this conversation.
 - When debugging, isolate root cause before applying fixes.
 - Use parallel tool calls when gathering independent information.
 - Keep responses concise. Lead with results, not narration.
@@ -108,6 +113,7 @@ export function registerCodingPrompt(pi: ExtensionAPI): void {
     const memoryBlock = formatSystemMemory(cwd, getTokenBudget());
     const progressBlock = formatProgressInjection(cwd);
     const learningSummaries = formatLearningSummaries(cwd);
+    const tasksBlock = formatTasksInjection(cwd);
 
     let systemPrompt = event.systemPrompt + "\n\n" + codingPrompt;
 
@@ -116,6 +122,9 @@ export function registerCodingPrompt(pi: ExtensionAPI): void {
     }
     if (progressBlock) {
       systemPrompt += "\n\n" + progressBlock;
+    }
+    if (tasksBlock) {
+      systemPrompt += "\n\n" + tasksBlock;
     }
     if (learningSummaries) {
       systemPrompt += "\n\n" + learningSummaries;

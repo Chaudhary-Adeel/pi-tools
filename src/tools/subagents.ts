@@ -9,8 +9,14 @@
 // their ndjson event stream, and collect the final assistant message text.
 //
 // This follows Pi's own subagent pattern from examples/extensions/subagent.
+//
+// Subagents run on a lighter model when one is configured (/config →
+// subagentModel, or PI_SUBAGENT_MODEL), and they can never spawn subagents
+// themselves: the child process is marked with PI_TOOLS_SUBAGENT=1 and this
+// module skips registering spawn_subagents inside marked processes.
 
 import { spawn } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,8 +24,16 @@ import type { Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate, getPiCommand } from "../lib/shared.ts";
+import { text, firstText, truncate, getPiCommand } from "../lib/shared.ts";
+import { getSubagentModel } from "../lib/config.ts";
 import { addSubagentUsage, type SubagentUsage } from "../lib/subagent-tokens.ts";
+
+/** Set in subagent subprocess environments; blocks nested spawning. */
+export const SUBAGENT_ENV_FLAG = "PI_TOOLS_SUBAGENT";
+
+export function isSubagentProcess(): boolean {
+  return process.env[SUBAGENT_ENV_FLAG] === "1";
+}
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -29,6 +43,9 @@ interface SubTask {
 }
 
 interface SubResult {
+  /** Stable id for this subagent run, e.g. "sub-2-4fd1". Reported back so
+   *  completed work can be referenced unambiguously. */
+  id: string;
   index: number;
   prompt: string;
   output: string;
@@ -61,7 +78,6 @@ function describeTool(toolName: string, args: Record<string, unknown>): string {
     case "glob_files": return `finding ${query}`;
     case "web_fetch": return `fetching ${shortPath(path)}`;
     case "web_search": return `web search: "${query}"`;
-    case "spawn_subagents": return `spawning sub-subagents`;
     case "browser_navigate": return `navigating to ${shortPath(path)}`;
     case "browser_snapshot": return `taking page snapshot`;
     case "memory_search": return `searching memory for "${query}"`;
@@ -83,15 +99,35 @@ function shortCmd(cmd: string): string {
 
 // ── core: run one subagent ─────────────────────────────────────────────────
 
+function makeSubagentId(index: number): string {
+  return `sub-${index + 1}-${crypto.randomBytes(2).toString("hex")}`;
+}
+
+/** Run a single subagent task and await its result. Used by the
+ *  spawn_subagents tool and by /newTask. */
+export function runSubagent(
+  cwd: string,
+  prompt: string,
+  model?: string,
+  signal?: AbortSignal,
+  onActivity?: (activity: SubActivity) => void,
+): Promise<SubagentRunResult> {
+  return runOne(cwd, { prompt }, 0, model, signal, onActivity);
+}
+
+export type SubagentRunResult = SubResult;
+
 function runOne(
   cwd: string,
   task: SubTask,
   index: number,
+  model?: string,
   signal?: AbortSignal,
   onActivity?: (activity: SubActivity) => void,
 ): Promise<SubResult> {
   return new Promise((resolve) => {
     const result: SubResult = {
+      id: makeSubagentId(index),
       index,
       prompt: task.prompt,
       output: "",
@@ -109,8 +145,10 @@ function runOne(
       "-p",
       "--no-session",
     ];
+    // Lighter model for subagents when configured — they do focused,
+    // disposable work and don't need the main session's model.
+    if (model) args.push("--model", model);
     // Inject optional context as a first user message.
-    // We embed it before the real task via --append-system-prompt.
     // For simplicity we pass the full prompt string directly.
     const fullPrompt = (task.context ? `${task.context}\n\n` : "") + task.prompt;
     args.push(`Task: ${fullPrompt}`);
@@ -119,6 +157,8 @@ function runOne(
       cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      // Mark the child so it can never register/spawn nested subagents.
+      env: { ...process.env, [SUBAGENT_ENV_FLAG]: "1" },
     });
 
     let buffer = "";
@@ -209,6 +249,7 @@ async function runAll(
   tasks: SubTask[],
   concurrency: number,
   cwd: string,
+  model?: string,
   signal?: AbortSignal,
   onProgress?: (done: number) => void,
   onActivity?: (activity: SubActivity) => void,
@@ -224,7 +265,7 @@ async function runAll(
       if (signal?.aborted) return;
       const current = nextIndex++;
       if (current >= tasks.length) return;
-      results[current] = await runOne(cwd, tasks[current], current, signal, onActivity);
+      results[current] = await runOne(cwd, tasks[current], current, model, signal, onActivity);
       done++;
       onProgress?.(done);
     }
@@ -237,6 +278,10 @@ async function runAll(
 // ── register ───────────────────────────────────────────────────────────────
 
 export function registerSubagentTool(pi: ExtensionAPI): void {
+  // Never register inside a subagent process — subagents must not spawn
+  // subagents. The tool simply doesn't exist for them.
+  if (isSubagentProcess()) return;
+
   pi.registerTool({
     name: "spawn_subagents",
     label: "Spawn Subagents",
@@ -245,7 +290,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "and return each subagent's final answer. Each subagent has its own " +
       "fresh context window, so use this to fan out work (research several " +
       "files/topics at once, draft independent pieces) and keep the main " +
-      "context lean. Only the conclusions come back — not the intermediate steps.",
+      "context lean. Only the conclusions come back — not the intermediate " +
+      "steps. Each completed subagent is reported with a stable id (e.g. " +
+      "sub-2-4fd1) you can reference later. Subagents may run on a lighter " +
+      "model (configured via /config) and cannot spawn subagents themselves.",
     promptSnippet: "delegate independent subtasks to parallel subagents",
     promptGuidelines: [
       "Give each subagent a self-contained prompt: it cannot see this conversation, so include every fact, path, and constraint it needs.",
@@ -291,10 +339,12 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const concurrency = Math.min(16, Math.max(1, params.max_concurrency ?? 4));
       const total = tasks.length;
       const label = total === 1 ? "subagent" : "subagents";
+      const model = getSubagentModel(ctx.cwd);
 
       // Show visible notification in the chat + status bar
-      ctx.ui.notify(`🚀 Spawning ${total} ${label}…`, "info");
-      ctx.ui.setStatus(`${total} ${label} running…`);
+      const modelNote = model ? ` (model: ${model})` : "";
+      ctx.ui.notify(`🚀 Spawning ${total} ${label}${modelNote}…`, "info");
+      ctx.ui.setStatus("subagents", `${total} ${label} running…`);
 
       // Live activity widget — compact single-line indicator of subagent progress.
       // Detailed results are in the chat output; this is just an at-a-glance widget.
@@ -343,14 +393,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           tasks,
           concurrency,
           ctx.cwd,
+          model,
           signal,
           (done) => {
             doneCount = done;
             const icon = done < total ? "⟳" : "✓";
-            ctx.ui.setStatus(`${icon} ${done}/${total} ${label} finished`);
+            ctx.ui.setStatus("subagents", `${icon} ${done}/${total} ${label} finished`);
             renderWidget();
             onUpdate?.({
               content: [{ type: "text", text: `Subagents finished: ${done}/${total}` }],
+              details: undefined,
             });
           },
           (activity) => {
@@ -368,7 +420,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         const body = results
           .map((r) => {
             const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
-            const header = `### Subagent ${r.index + 1}  ${status}\nTask: ${r.prompt}`;
+            const header = `### Subagent ${r.index + 1} [${r.id}]  ${status}\nTask: ${r.prompt}`;
             const out = r.output || r.stderr || "(no output)";
             return `${header}\n\nResult:\n${out}`;
           })
@@ -376,10 +428,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 
         const resultBody = truncate(body, 40_000);
 
-        // Clear status bar, show completion notification
-        ctx.ui.setStatus(undefined);
+        // Clear status bar, show completion notification with completed ids
+        ctx.ui.setStatus("subagents", undefined);
         const icon = results.every((r) => r.exitCode === 0) ? "✓" : "⚠";
-        ctx.ui.notify(`${icon} ${results.length}/${total} ${label} completed`, "info");
+        const idList = results.map((r) => r.id).join(", ");
+        ctx.ui.notify(`${icon} ${results.length}/${total} ${label} completed (${idList})`, "info");
 
         // ── Accumulate subagent LLM usage into the tracker so the ──
         // ── main footer can show the combined total.               ──
@@ -404,7 +457,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             const fname = `subagent-${r.index + 1}-result.md`;
             const fp = path.join(tmpDir, fname);
             const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
-            const content = `# Subagent ${r.index + 1}  ${status}\n\n**Task:** ${r.prompt}\n\n**Result:**\n${r.output || r.stderr || "(no output)"}`;
+            const content = `# Subagent ${r.index + 1} [${r.id}]  ${status}\n\n**Task:** ${r.prompt}\n\n**Result:**\n${r.output || r.stderr || "(no output)"}`;
             await fs.promises.writeFile(fp, content, "utf-8");
             filePaths.push(fp);
           }
@@ -415,7 +468,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             .map((r, i) => {
               const status = r.exitCode === 0 ? "✓" : `✗`;
               const preview = (r.output || r.stderr || "").slice(0, 120);
-              return `${status} **Subagent ${r.index + 1}:** ${r.prompt.slice(0, 80)}… → \`${filePaths[i]}\`\n> ${preview}…`;
+              return `${status} **Subagent ${r.index + 1} [${r.id}]:** ${r.prompt.slice(0, 80)}… → \`${filePaths[i]}\`\n> ${preview}…`;
             })
             .join("\n\n");
 
@@ -424,6 +477,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             {
               count: results.length,
               successCount: results.filter((r) => r.exitCode === 0).length,
+              ids: results.map((r) => r.id),
               prompts: results.map((r) => r.prompt),
               models: results.map((r) => r.model).filter(Boolean),
               totalTurns: results.reduce((s, r) => s + r.turns, 0),
@@ -438,13 +492,14 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         return text(resultBody, {
           count: results.length,
           successCount: results.filter((r) => r.exitCode === 0).length,
+          ids: results.map((r) => r.id),
           prompts: results.map((r) => r.prompt),
           models: results.map((r) => r.model).filter(Boolean),
           totalTurns: results.reduce((s, r) => s + r.turns, 0),
           subagentUsage: agg,
         });
       } catch (_err) {
-        ctx.ui.setStatus(undefined);
+        ctx.ui.setStatus("subagents", undefined);
         ctx.ui.setWidget("subagents", undefined);
         throw _err;
       }
@@ -466,16 +521,17 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       }
       return new Text(t, 0, 0);
     },
-    renderResult(result, _options, theme, _context) {
-      if (result.isError) {
-        const msg = result.content?.[0]?.text ?? "Error";
-        return new Text(theme.fg("error", msg), 0, 0);
+    renderResult(result, _options, theme, context) {
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const d = result.details as Record<string, unknown> | undefined;
       const count = (d?.count as number) ?? 0;
       const ok = (d?.successCount as number) ?? count;
+      const ids = (d?.ids as string[] | undefined) ?? [];
       const icon = ok === count ? theme.fg("success", "✓") : theme.fg("warning", "◐");
       let summary = icon + " " + theme.fg("muted", `${ok}/${count} subagent(s) finished`);
+      if (ids.length > 0) summary += "  " + theme.fg("dim", ids.join(" "));
       return new Text(summary, 0, 0);
     },
   });

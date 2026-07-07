@@ -318,7 +318,7 @@ export function registerServeCommand(pi: ExtensionAPI): void {
       // Cleanup
       if (boreProc) boreProc.kill();
       server.close();
-      ctx.ui.clearStatus("serve");
+      ctx.ui.setStatus("serve", undefined);
     },
   });
 }

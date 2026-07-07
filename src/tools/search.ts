@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, errorText, truncate, globToRegExp } from "../lib/shared.ts";
+import { text, firstText, truncate, globToRegExp } from "../lib/shared.ts";
 import { walk } from "../lib/walk.ts";
 
 const NUL = String.fromCharCode(0); // binary-file sentinel
@@ -43,7 +43,7 @@ export function registerSearchTools(pi: ExtensionAPI): void {
       try {
         re = new RegExp(params.pattern, params.ignore_case ? "i" : "");
       } catch (e) {
-        return errorText(`Invalid regex: ${(e as Error).message}`);
+        throw new Error(`Invalid regex: ${(e as Error).message}`);
       }
       const root = base(ctx, params.path);
       const fileFilter = params.glob ? globToRegExp(params.glob) : null;
@@ -86,11 +86,10 @@ export function registerSearchTools(pi: ExtensionAPI): void {
       if (args.glob) t += theme.fg("dim", ` in ${args.glob as string}`);
       return new Text(t, 0, 0);
     },
-    renderResult(result, _options, theme, _context) {
+    renderResult(result, _options, theme, context) {
       const d = result.details as Record<string, unknown> | undefined;
-      if (result.isError) {
-        const msg = result.content?.[0]?.text ?? "Error";
-        return new Text(theme.fg("error", msg), 0, 0);
+      if (context.isError) {
+        return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const matches = d?.matches as number ?? 0;
       const scanned = d?.scanned as number ?? 0;

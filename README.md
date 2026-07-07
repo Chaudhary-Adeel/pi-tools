@@ -17,12 +17,15 @@ Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 | `read_file` | Read a text file with line numbers + offset/limit |
 | `grep_search` | Regex search over file contents, with glob filter |
 | `glob_files` | Find files by `**/*.ext`-style pattern |
+| `code_references` | Trace a symbol across files: definitions, imports, call sites with context — progressive code understanding before editing |
+| `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
+| `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
-| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context) |
+| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked |
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 | `memory_search` | Search across all memory files (system + learnings) for a query |
 
-**Browser (CDP):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps. SSRF-protected (blocks `file://`, private/reserved IPs).
+**Browser (CDP):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps. SSRF-protected (blocks `file://`, private/reserved IPs). Verified end-to-end against headless Chromium.
 
 For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 
@@ -36,6 +39,10 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 | `/consolidate` | Reorganize memory learnings — merge duplicates, archive stale entries, clean up |
 | `/init` | Initialize project memory from codebase analysis (framework, scripts, conventions) |
 | `/serve` | Start HTTP API server + bore tunnel for mobile/remote access |
+| `/config` | Configure git identity, greetings name, subagent model — interactive or `/config <key> <value>` |
+| `/connectors` | List the connectors this package provides (tools, commands, requirements, active state) |
+| `/agents` | Show subagent setup: main/subagent model, nesting policy, presets (explorer, coder, reviewer, tester) |
+| `/newTask` | Run a task in a fresh subagent: `/newTask <prompt>` (standard) or `/newTask background <prompt>` (detached, logged to `.pi/newtask/`, tracked in tasks.json). Preset prefix: `/newTask reviewer: …` |
 | `/skill:browser` | Loads browser automation instructions into context |
 
 **Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
@@ -66,14 +73,16 @@ across sessions without you doing anything.
 ### Smart Prompting
 
 - **Token-efficient operating prompt** — pushes the model to batch tool calls, delegate to subagents, read only what it needs.
+- **Progressive task resolution** — multi-step work is decomposed into the `tasks` list, resolved step by step, and only marked done after verification; shared symbols are traced with `code_references` before editing.
+- **Git discipline** — the agent never commits or pushes unless explicitly asked.
 - **Model-aware coding instructions** — extra guardrails for DeepSeek models (XML-structured self-verification, context management).
-- **Live memory injection** — system memory + learning summaries + progress are injected fresh each turn from disk.
+- **Live memory injection** — system memory + learning summaries + progress + open tasks are injected fresh each session from disk.
 
 ### Footer
 
-Two-line footer with context window progress bar (colored block chars), token I/O stats (↑/↓), cache hits, cost, subagent contribution, git branch, and model name.
+Two-line footer with repo+branch (`🌿 pi-tools:main`), context window progress bar (colored block chars), token I/O stats (↑/↓), cache hits, cost, subagent contribution, and model name. The bottom line shows the configured greetings name.
 
-Git commits through Pi are automatically signed as `adeel.bot`.
+Git commits through Pi are signed with the configured git identity (default `adeel.bot`) — change it with `/config`.
 
 ## Install
 
@@ -95,9 +104,16 @@ npm install
 
 ## Config
 
+**`/config` settings** (persisted to `.pi/pi-tools.json` per-project or `~/.pi/pi-tools.json` globally):
+- `gitName` / `gitEmail` — identity injected into `git commit` (default: `adeel.bot`)
+- `greetingName` — name shown in the footer (default: Muhammad Adeel Chaudhary)
+- `subagentModel` — lighter model for subagents and `/newTask` (default: inherit session model)
+
 **Environment variables:**
 - `TAVILY_API_KEY` — enables Tavily-backed `web_search` (falls back to DuckDuckGo otherwise)
+- `GITHUB_TOKEN` (or `GH_TOKEN`) — higher rate limits + private repos for `github_explore`
 - `PI_MEMORY_TOKEN_BUDGET` — memory injection token cap (default: 4000)
+- `PI_SUBAGENT_MODEL` — overrides the configured `subagentModel`
 
 **Flags** (pass on `pi` invocation):
 - `--no-auto-learn` — disable automatic learning capture on session end
@@ -120,7 +136,10 @@ pi-tools/
 ├── skills/browser/              # browser automation skill
 ├── tests/                       # test suite
 │   ├── memory.test.ts
-│   └── memory-map.test.ts
+│   ├── memory-map.test.ts
+│   ├── config.test.ts
+│   ├── tasks.test.ts
+│   └── code-references.test.ts
 ├── .pi/memory/                  # agent's persistent memory
 │   ├── memory-map.md            #   auto-generated index
 │   ├── system/                  #   injected every turn
@@ -134,22 +153,33 @@ pi-tools/
     │   ├── doctor-command.ts    # /doctor — memory health audit
     │   ├── consolidate-command.ts # /consolidate — reorganize learnings
     │   ├── init-command.ts      # /init — bootstrap memory
-    │   └── serve-command.ts     # /serve — HTTP API + bore tunnel
+    │   ├── serve-command.ts     # /serve — HTTP API + bore tunnel
+    │   ├── config-command.ts    # /config — settings editor
+    │   ├── connectors-command.ts # /connectors — connector inventory
+    │   ├── agents-command.ts    # /agents — subagent presets + model info
+    │   └── new-task-command.ts  # /newTask — standard/background subagent runs
     ├── lib/
     │   ├── memory.ts            # two-tier memory system + auto-bootstrap
     │   ├── memory-map.ts        # footprint computation + map generation
-    │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory injection
+    │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory/tasks injection
     │   ├── browser-cdp.ts       # zero-dep CDP client
+    │   ├── code-references.ts   # cross-file symbol tracing engine
+    │   ├── config.ts            # layered pi-tools config (/config)
+    │   ├── tasks.ts             # persistent structured task list
+    │   ├── agents.ts            # subagent presets
     │   ├── learn.ts             # session distillation + auto-capture
     │   ├── subagent-tokens.ts   # cross-process subagent token tracking
     │   ├── walk.ts              # directory tree walker
-    │   └── shared.ts            # shared helpers (formatBytes, getPiCommand, etc.)
+    │   └── shared.ts            # shared helpers (text, firstText, getRepoName, …)
     └── tools/
         ├── web.ts               # web_fetch, web_search
         ├── files.ts             # read_file
         ├── search.ts            # grep_search, glob_files
+        ├── code-references.ts   # code_references
+        ├── github-explore.ts    # github_explore
+        ├── tasks.ts             # tasks
         ├── ask.ts               # ask_user
-        ├── subagents.ts         # spawn_subagents
+        ├── subagents.ts         # spawn_subagents (+ runSubagent for /newTask)
         ├── memory.ts            # memory_map
         ├── memory-search.ts     # memory_search
         ├── browser.ts           # 7 CDP browser tools

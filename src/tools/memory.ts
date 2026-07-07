@@ -8,7 +8,7 @@
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { text, errorText, formatBytes } from "../lib/shared.ts";
+import { text, formatBytes } from "../lib/shared.ts";
 import {
   computeFootprint,
   computeStats,
@@ -154,7 +154,7 @@ export function registerMemoryMapTool(pi: ExtensionAPI): void {
           return text(formatFootprintLine(stats), { action: "stats", stats });
         }
         default:
-          return errorText(`Unknown action: ${action}. Use 'view', 'generate', or 'stats'.`);
+          throw new Error(`Unknown action: ${action}. Use 'view', 'generate', or 'stats'.`);
       }
     },
   });

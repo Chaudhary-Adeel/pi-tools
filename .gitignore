@@ -1,2 +1,7 @@
 node_modules/
 package-lock.json
+
+# pi-tools runtime state (per-project, not source)
+.pi/tasks.json
+.pi/newtask/
+.pi/pi-tools.json

@@ -30,6 +30,7 @@ class MiniWS {
   private buffer = "";
   private callbacks!: WSCallbacks;
   private closed = false;
+  private handshakeDone = false;
 
   connect(wsUrl: string, cbs: WSCallbacks): Promise<void> {
     this.callbacks = cbs;
@@ -39,6 +40,8 @@ class MiniWS {
     const path = url.pathname + url.search;
 
     return new Promise((resolve, reject) => {
+      let handshakeBuf = "";
+
       const sock = connect({ host, port: actualPort }, () => {
         // Send WebSocket upgrade request
         const key = Buffer.from(
@@ -57,22 +60,31 @@ class MiniWS {
         ].join("\r\n");
 
         sock.write(req);
-        this.socket = sock;
       });
 
       sock.on("data", (data: Buffer) => {
-        if (!this.socket) {
-          // Still handshaking
-          const str = data.toString();
-          if (str.includes("101")) {
-            // Upgrade accepted
-            this.socket = sock;
-            this.buffer = "";
-            resolve();
-          } else if (str.includes("4") || str.includes("5")) {
-            const firstLine = str.split("\r\n")[0] ?? "error";
-            reject(new Error(`WebSocket handshake failed: ${firstLine}`));
+        if (!this.handshakeDone) {
+          handshakeBuf += data.toString("binary");
+          const headerEnd = handshakeBuf.indexOf("\r\n\r\n");
+          if (headerEnd === -1) {
+            if (handshakeBuf.length > 16384) {
+              reject(new Error("WebSocket handshake response too large"));
+              sock.destroy();
+            }
+            return;
           }
+          const statusLine = handshakeBuf.slice(0, handshakeBuf.indexOf("\r\n"));
+          if (!/^HTTP\/1\.[01] 101/.test(statusLine)) {
+            reject(new Error(`WebSocket handshake failed: ${statusLine}`));
+            sock.destroy();
+            return;
+          }
+          this.handshakeDone = true;
+          this.socket = sock;
+          // Frames may arrive in the same packet as the handshake headers.
+          this.buffer = handshakeBuf.slice(headerEnd + 4);
+          resolve();
+          if (this.buffer) this.drain();
           return;
         }
         this.buffer += data.toString("binary");
@@ -85,7 +97,7 @@ class MiniWS {
       });
 
       sock.on("error", (err) => {
-        if (!this.socket) {
+        if (!this.handshakeDone) {
           reject(err);
         } else {
           this.callbacks.onError(err);
@@ -121,12 +133,6 @@ class MiniWS {
     while (this.buffer.length >= 2) {
       const b0 = this.buffer.charCodeAt(0);
       const opcode = b0 & 0x0f;
-      if (opcode === 0x8) return; // close frame — ignore
-      if (opcode === 0x9 /* ping */) {
-        this.sendPong();
-        this.buffer = ""; // consume ping
-        return;
-      }
 
       const b1 = this.buffer.charCodeAt(1);
       const masked = (b1 & 0x80) !== 0;
@@ -139,15 +145,14 @@ class MiniWS {
           (this.buffer.charCodeAt(2) << 8) | this.buffer.charCodeAt(3);
         headerLen = 4;
       } else if (payloadLen === 127) {
-        // 64-bit length — CDP messages won't be this big
+        // 64-bit length: bytes 2..9 big-endian. Messages never exceed 2^32,
+        // so the upper 4 bytes (2..5) are zero — the length is in bytes 6..9.
         if (this.buffer.length < 10) return;
         payloadLen = 0;
-        for (let i = 0; i < 4; i++) {
-          payloadLen =
-            (payloadLen << 8) | this.buffer.charCodeAt(2 + i);
+        for (let i = 6; i < 10; i++) {
+          payloadLen = payloadLen * 256 + this.buffer.charCodeAt(i);
         }
         headerLen = 10;
-        // Upper 4 bytes ignored (messages never exceed 2^32)
       }
 
       const maskLen = masked ? 4 : 0;
@@ -181,22 +186,23 @@ class MiniWS {
 
       if (opcode === 0x1 || opcode === 0x0) {
         this.callbacks.onMessage(payload);
+      } else if (opcode === 0x9) {
+        // Ping — reply with a pong echoing the payload.
+        this.socket?.write(this.framePong(Buffer.from(payload, "binary")));
+      } else if (opcode === 0x8) {
+        // Close frame — acknowledge and stop.
+        this.close();
+        return;
       }
+      // Other control frames (pong, etc.) are consumed and ignored.
     }
   }
 
-  private sendPong(): void {
-    // Pong frames are 0x8A + payload (copy ping payload)
-    if (this.buffer.length >= 2) {
-      const b1 = this.buffer.charCodeAt(1);
-      const payloadLen = b1 & 0x7f;
-      let headerLen = 2;
-      let len = payloadLen;
-      if (payloadLen === 126) len = ((this.buffer.charCodeAt(2) << 8) | this.buffer.charCodeAt(3));
-      const total = headerLen + (payloadLen >= 126 ? (payloadLen === 126 ? 2 : 8) : 0) + len;
-      // We'd need to extract and re-send payload; for simplicity just send empty pong
-      this.socket?.write(Buffer.from([0x8a, 0x00]));
-    }
+  private framePong(payload: Buffer): Buffer {
+    // Pong: FIN=1 opcode=0xA, client frames must be masked.
+    const frame = this.frameText(payload);
+    frame[0] = 0x8a;
+    return frame;
   }
 
   private frameText(payload: Buffer): Buffer {
@@ -424,7 +430,13 @@ export class CDPClient {
     const lines: string[] = [];
     const renderNode = (nodeId: string, indent: number) => {
       const n = nodeMap.get(nodeId);
-      if (!n || n.ignored) return;
+      if (!n) return;
+      if (n.ignored) {
+        // Ignored wrappers (role "none") still parent the real content —
+        // descend through them without printing or consuming depth.
+        for (const childId of n.childIds ?? []) renderNode(childId, indent);
+        return;
+      }
 
       const role = n.role?.value ?? "?";
       const name = n.name?.value ?? "";
@@ -477,7 +489,7 @@ export class CDPClient {
         const results = (await this.send("DOM.getSearchResults", {
           searchId: search.searchId,
           fromIndex: 0,
-          toIndex: 0,
+          toIndex: 1, // exclusive upper bound — 0 is an invalid empty range
         })) as { nodeIds: number[] };
         if (results.nodeIds[0] != null) nodeId = results.nodeIds[0];
         await this.send("DOM.discardSearchResults", {
