@@ -29,11 +29,12 @@ const FIELDS: Field[] = [
   { key: "gitEmail", label: "Git email", hint: "user.email injected into git commits" },
   { key: "greetingName", label: "Greetings name", hint: "name shown in the footer" },
   { key: "subagentModel", label: "Subagent model", hint: "lighter model for spawn_subagents (empty = inherit)" },
+  { key: "autoDelegate", label: "Auto-delegate", hint: "delegation harness hints/nudges: on or off (default on)" },
 ];
 
 function effectiveValue(cfg: PiToolsConfig, key: keyof PiToolsConfig): string {
   const v = cfg[key] ?? (CONFIG_DEFAULTS as Record<string, string | undefined>)[key];
-  return v ?? "(inherit)";
+  return v === undefined ? "(inherit)" : String(v);
 }
 
 function summary(cwd: string): string {

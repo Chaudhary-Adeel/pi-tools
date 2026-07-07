@@ -43,6 +43,7 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 | `/connectors` | List the connectors this package provides (tools, commands, requirements, active state) |
 | `/agents` | Show subagent setup: main/subagent model, nesting policy, presets (explorer, coder, reviewer, tester) |
 | `/newTask` | Run a task in a fresh subagent: `/newTask <prompt>` (standard) or `/newTask background <prompt>` (detached, logged to `.pi/newtask/`, tracked in tasks.json). Preset prefix: `/newTask reviewer: …` |
+| `/harness` | Delegation-harness stats: research calls, subagent fan-outs, delegation ratio, nudges sent |
 | `/skill:browser` | Loads browser automation instructions into context |
 
 **Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
@@ -69,6 +70,16 @@ across sessions without you doing anything.
 - Skips trivial sessions and avoids duplicating existing learnings.
 - Run `/learn` any time to capture the current session on demand.
 - Pass `--no-auto-learn` to disable automatic capture for a run.
+
+### Delegation Harness
+
+Prompt rules alone don't make a model fan out — so pi-tools extends Pi's harness with **active subagent-utilization steering**:
+
+- **Prompt-shape hints** — decomposable requests (lists, multi-part asks, repo-wide sweeps) get a `<parallelization_hint>` injected into that turn's system prompt, while the plan is still forming.
+- **Research-streak nudges** — 5+ sequential research calls (read/grep/glob/web/…) in one loop without a fan-out triggers a mid-stream steering nudge to break the remaining lookups into subagents. Rate-limited (once per loop, 3 per session).
+- **Context-pressure nudges** — past 60% context usage with research still running, the harness suggests delegating the rest with `output_to_files: true` (once per session).
+- **`/harness`** — live stats: research calls, fan-outs, delegation ratio, hints/nudges sent.
+- Disable with `/config autoDelegate off`. Subagent processes are excluded automatically (they can't spawn).
 
 ### Smart Prompting
 
@@ -108,6 +119,7 @@ npm install
 - `gitName` / `gitEmail` — identity injected into `git commit` (default: `adeel.bot`)
 - `greetingName` — name shown in the footer (default: Muhammad Adeel Chaudhary)
 - `subagentModel` — lighter model for subagents and `/newTask` (default: inherit session model)
+- `autoDelegate` — delegation-harness hints/nudges, `on`/`off` (default: on)
 
 **Environment variables:**
 - `TAVILY_API_KEY` — enables Tavily-backed `web_search` (falls back to DuckDuckGo otherwise)
@@ -159,6 +171,8 @@ pi-tools/
     │   ├── agents-command.ts    # /agents — subagent presets + model info
     │   └── new-task-command.ts  # /newTask — standard/background subagent runs
     ├── lib/
+    │   ├── harness.ts           # delegation heuristics + nudge state machine
+    │   ├── harness-register.ts  # harness event wiring + /harness command
     │   ├── memory.ts            # two-tier memory system + auto-bootstrap
     │   ├── memory-map.ts        # footprint computation + map generation
     │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory/tasks injection
