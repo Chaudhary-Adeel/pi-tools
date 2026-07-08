@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, firstText, truncate } from "../lib/shared.ts";
+import { cachedFetch } from "../cvm/http-cache.ts";
 
 const API = "https://api.github.com";
 
@@ -29,17 +30,18 @@ function ghHeaders(): Record<string, string> {
   return headers;
 }
 
-async function ghGet(path: string, signal?: AbortSignal): Promise<unknown> {
-  const res = await fetch(`${API}${path}`, { headers: ghHeaders(), signal });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
+// Routed through the CVM HTTP cache: GitHub sends strong ETags, so repeat
+// queries revalidate for free (304s also don't count against rate limits).
+async function ghGet(cwd: string, path: string, signal?: AbortSignal, ttlMs = 5 * 60_000): Promise<unknown> {
+  const res = await cachedFetch(cwd, `${API}${path}`, { headers: ghHeaders(), signal, ttlMs });
+  if (res.status < 200 || res.status >= 300) {
     const hint =
       res.status === 403 && !process.env.GITHUB_TOKEN && !process.env.GH_TOKEN
         ? " (rate-limited — set GITHUB_TOKEN for higher limits)"
         : "";
-    throw new Error(`GitHub API ${res.status} for ${path}${hint}: ${body.slice(0, 200)}`);
+    throw new Error(`GitHub API ${res.status} for ${path}${hint}: ${res.body.slice(0, 200)}`);
   }
-  return res.json();
+  return JSON.parse(res.body);
 }
 
 function requireRepo(repo?: string): { owner: string; name: string } {
@@ -95,14 +97,14 @@ export function registerGitHubExploreTool(pi: ExtensionAPI): void {
         Type.Number({ description: "Cap results for searches/tree (default 20)." }),
       ),
     }),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const max = Math.min(50, Math.max(1, params.max_results ?? 20));
 
       switch (params.action) {
         case "search_code": {
           if (!params.query) throw new Error("'search_code' needs a query.");
           const q = params.repo ? `${params.query} repo:${params.repo}` : params.query;
-          const data = (await ghGet(
+          const data = (await ghGet(ctx.cwd,
             `/search/code?q=${encodeURIComponent(q)}&per_page=${max}`,
             signal,
           )) as { total_count: number; items: Array<{ repository: { full_name: string }; path: string; html_url: string }> };
@@ -118,7 +120,7 @@ export function registerGitHubExploreTool(pi: ExtensionAPI): void {
 
         case "search_repos": {
           if (!params.query) throw new Error("'search_repos' needs a query.");
-          const data = (await ghGet(
+          const data = (await ghGet(ctx.cwd,
             `/search/repositories?q=${encodeURIComponent(params.query)}&per_page=${max}`,
             signal,
           )) as { total_count: number; items: Array<{ full_name: string; description: string | null; stargazers_count: number; language: string | null }> };
@@ -139,8 +141,8 @@ export function registerGitHubExploreTool(pi: ExtensionAPI): void {
           const { owner, name } = requireRepo(params.repo);
           const ref =
             params.ref ??
-            ((await ghGet(`/repos/${owner}/${name}`, signal)) as { default_branch: string }).default_branch;
-          const data = (await ghGet(
+            ((await ghGet(ctx.cwd, `/repos/${owner}/${name}`, signal)) as { default_branch: string }).default_branch;
+          const data = (await ghGet(ctx.cwd,
             `/repos/${owner}/${name}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
             signal,
           )) as { truncated: boolean; tree: Array<{ path: string; type: string; size?: number }> };
@@ -161,7 +163,7 @@ export function registerGitHubExploreTool(pi: ExtensionAPI): void {
           const { owner, name } = requireRepo(params.repo);
           if (!params.path) throw new Error("'read_file' needs a path.");
           const refQ = params.ref ? `?ref=${encodeURIComponent(params.ref)}` : "";
-          const data = (await ghGet(
+          const data = (await ghGet(ctx.cwd,
             `/repos/${owner}/${name}/contents/${params.path
               .split("/")
               .map(encodeURIComponent)

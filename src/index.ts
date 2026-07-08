@@ -38,6 +38,11 @@ import { registerNewTaskCommand } from "./commands/new-task-command.ts";
 import { registerGitHubExploreTool } from "./tools/github-explore.ts";
 import { registerCodeReferencesTool } from "./tools/code-references.ts";
 import { registerTaskTool } from "./tools/tasks.ts";
+import { registerContextResolveTool } from "./tools/context-resolve.ts";
+import { registerCvmCommand } from "./commands/cvm-command.ts";
+import { resetDeltaLedger } from "./cvm/delta.ts";
+import { resetCvmMetrics } from "./cvm/metrics.ts";
+import { indexRepo } from "./cvm/symbols.ts";
 import { getGreetingName, getGitIdentity } from "./lib/config.ts";
 import { registerDelegationHarness } from "./lib/harness-register.ts";
 import { getRepoName } from "./lib/shared.ts";
@@ -58,6 +63,7 @@ export default function (pi: ExtensionAPI): void {
   registerGitHubExploreTool(pi); // github_explore — search/read public GitHub repos
   registerCodeReferencesTool(pi); // code_references — progressive code understanding
   registerTaskTool(pi); //       tasks — structured session task list
+  registerContextResolveTool(pi); // context_resolve — CVM symbol-level retrieval
 
   // Operating prompt (token efficiency + parallelism/subagent strategy).
   registerPrompt(pi);
@@ -106,6 +112,9 @@ export default function (pi: ExtensionAPI): void {
   // Delegation harness — active subagent-utilization steering: prompt-shape
   // hints, research-streak nudges, context-pressure nudges, /harness stats.
   registerDelegationHarness(pi);
+
+  // /cvm — Context Virtual Memory stats + manual reindex.
+  registerCvmCommand(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {
@@ -209,8 +218,26 @@ export default function (pi: ExtensionAPI): void {
     ensureMemoryDirs(ctx.cwd);
     memoryModified = false;
 
+    // CVM: a fresh context has seen nothing — reset the delta ledger and
+    // session metrics, then warm the symbol index in the background so the
+    // first context_resolve is near-instant.
+    resetDeltaLedger();
+    resetCvmMetrics();
+    void indexRepo(ctx.cwd).catch(() => {});
+
     // Auto-bootstrap memory on first run — create starter files from codebase
     autoBootstrapMemory(ctx.cwd);
+  });
+
+  // CVM correctness: compaction and tree navigation destroy prior tool
+  // results from the model's context — a delta stub claiming content is
+  // "already in your context" would then be false. Reset the ledger so the
+  // next retrieval returns full content again.
+  pi.on("session_compact", () => {
+    resetDeltaLedger();
+  });
+  pi.on("session_tree", () => {
+    resetDeltaLedger();
   });
 
   // ── custom footer with progress bar and polished layout ────────────────────

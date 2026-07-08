@@ -18,6 +18,7 @@ Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 | `grep_search` | Regex search over file contents, with glob filter |
 | `glob_files` | Find files by `**/*.ext`-style pattern |
 | `code_references` | Trace a symbol across files: definitions, imports, call sites with context — progressive code understanding before editing |
+| `context_resolve` | CVM symbol-level retrieval: exact source + dependency signatures + callers with confidence scoring — instead of whole files |
 | `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
 | `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
@@ -70,6 +71,17 @@ across sessions without you doing anything.
 - Skips trivial sessions and avoids duplicating existing learnings.
 - Run `/learn` any time to capture the current session on demand.
 - Pass `--no-auto-learn` to disable automatic capture for a run.
+
+### Context Virtual Memory (CVM)
+
+A layered context engine ([docs/CVM.md](docs/CVM.md)) that delivers the **smallest complete context** — never re-downloading, re-parsing, or re-sending identical content:
+
+- **Hot / warm / cold tiers** — in-process LRU+TTL, persistent `node:sqlite` store (`.pi/cvm/cvm.db`), brotli content-addressed cold objects. Zero new dependencies.
+- **Incremental symbol memory** — the repo is indexed once; unchanged files cost one `stat()` afterwards. Lookups are instant.
+- **`context_resolve` tool** — a symbol's exact source + dependency signatures + callers instead of whole files, with a confidence score that auto-expands retrieval when coverage is low. Source code is never summarized in place of itself.
+- **Delta mode** — repeat `read_file`/`web_fetch` of unchanged content returns a short `[CVM] unchanged` stub; changed content returns a compact diff. `force_full: true` recovers after compaction.
+- **HTTP cache** — ETag/Last-Modified revalidation for `web_fetch` and `github_explore`; 304s cost no download (and don't burn GitHub rate limits).
+- **`/cvm`** — tokens saved, hit ratios, index and storage stats; `/cvm index` forces a reindex.
 
 ### Delegation Harness
 
