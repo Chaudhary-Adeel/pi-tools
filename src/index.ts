@@ -229,6 +229,17 @@ export default function (pi: ExtensionAPI): void {
     autoBootstrapMemory(ctx.cwd);
   });
 
+  // CVM correctness: compaction and tree navigation destroy prior tool
+  // results from the model's context — a delta stub claiming content is
+  // "already in your context" would then be false. Reset the ledger so the
+  // next retrieval returns full content again.
+  pi.on("session_compact", () => {
+    resetDeltaLedger();
+  });
+  pi.on("session_tree", () => {
+    resetDeltaLedger();
+  });
+
   // ── custom footer with progress bar and polished layout ────────────────────
 
   pi.on("session_start", (_event, ctx) => {

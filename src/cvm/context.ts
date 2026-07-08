@@ -16,10 +16,12 @@ import * as path from "node:path";
 import { estimateTokens } from "./fingerprint.ts";
 import { HotCache } from "./hot-cache.ts";
 import { cvmMetrics, recordConfidence, recordTokensSaved } from "./metrics.ts";
-import { findSymbols, indexRepo } from "./symbols.ts";
+import { findSymbols, indexRepo, resetIndexDebounce } from "./symbols.ts";
 import { getWarmStore, type SymbolRecord } from "./warm-store.ts";
 
-const fileCache = new HotCache<string>({ capacity: 128, ttlMs: 60_000 });
+// Keyed by path+mtime so an edit invalidates instantly — a TTL alone would
+// serve pre-edit source as authoritative for its whole window.
+const fileCache = new HotCache<string>({ capacity: 128, ttlMs: 5 * 60_000 });
 
 const IDENT_RE = /[A-Za-z_$][\w$]{2,}/g;
 const COMMON_IDENTS = new Set([
@@ -51,11 +53,13 @@ export interface ResolveOptions {
 
 async function readLines(cwd: string, rel: string): Promise<string[] | undefined> {
   const abs = path.join(cwd, rel);
-  const cached = fileCache.get(abs);
-  if (cached !== undefined) return cached.split("\n");
   try {
+    const stat = await fsp.stat(abs);
+    const key = `${abs}:${stat.mtimeMs}:${stat.size}`;
+    const cached = fileCache.get(key);
+    if (cached !== undefined) return cached.split("\n");
     const content = await fsp.readFile(abs, "utf-8");
-    fileCache.set(abs, content);
+    fileCache.set(key, content);
     return content.split("\n");
   } catch {
     return undefined;
@@ -89,7 +93,27 @@ export async function resolveContext(
   await indexRepo(cwd, { signal: options.signal });
   const warm = getWarmStore(cwd);
 
-  const defs = findSymbols(cwd, symbolName).slice(0, maxDefs);
+  let defs = findSymbols(cwd, symbolName).slice(0, maxDefs);
+
+  // Staleness guard: if any defining file changed since it was indexed
+  // (edits inside the index debounce window), force a reindex and re-look-up
+  // so line ranges never slice outdated source.
+  let stale = false;
+  for (const def of defs) {
+    const rec = warm.fileGet(def.file);
+    try {
+      const stat = await fsp.stat(path.join(cwd, def.file));
+      if (!rec || rec.mtimeMs !== stat.mtimeMs || rec.size !== stat.size) stale = true;
+    } catch {
+      stale = true; // file gone
+    }
+    if (stale) break;
+  }
+  if (stale) {
+    resetIndexDebounce(cwd);
+    await indexRepo(cwd, { force: true, signal: options.signal });
+    defs = findSymbols(cwd, symbolName).slice(0, maxDefs);
+  }
   if (defs.length === 0) {
     recordConfidence(0);
     return {

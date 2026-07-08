@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS http (
 class SqliteWarmStore implements WarmStore {
   readonly backend = "sqlite" as const;
   private db: import("node:sqlite").DatabaseSync;
+  private stmts = new Map<string, import("node:sqlite").StatementSync>();
 
   constructor(dbPath: string) {
     const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
@@ -116,9 +117,18 @@ class SqliteWarmStore implements WarmStore {
     this.db.exec(SCHEMA);
   }
 
+  /** Prepared statements are cached — re-parsing SQL per call is waste. */
+  private stmt(sql: string): import("node:sqlite").StatementSync {
+    let s = this.stmts.get(sql);
+    if (!s) {
+      s = this.db.prepare(sql);
+      this.stmts.set(sql, s);
+    }
+    return s;
+  }
+
   kvGet(key: string): string | undefined {
-    const row = this.db
-      .prepare("SELECT value, ttl_at FROM kv WHERE key = ?")
+    const row = this.stmt("SELECT value, ttl_at FROM kv WHERE key = ?")
       .get(key) as { value: string; ttl_at: number } | undefined;
     if (!row) return undefined;
     if (row.ttl_at !== 0 && row.ttl_at < Date.now()) {
@@ -130,17 +140,16 @@ class SqliteWarmStore implements WarmStore {
 
   kvSet(key: string, value: string, ttlMs?: number): void {
     const ttlAt = ttlMs ? Date.now() + ttlMs : 0;
-    this.db
-      .prepare("INSERT OR REPLACE INTO kv (key, value, ttl_at) VALUES (?, ?, ?)")
+    this.stmt("INSERT OR REPLACE INTO kv (key, value, ttl_at) VALUES (?, ?, ?)")
       .run(key, value, ttlAt);
   }
 
   kvDelete(key: string): void {
-    this.db.prepare("DELETE FROM kv WHERE key = ?").run(key);
+    this.stmt("DELETE FROM kv WHERE key = ?").run(key);
   }
 
   fileGet(p: string): FileRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM files WHERE path = ?").get(p) as
+    const row = this.stmt("SELECT * FROM files WHERE path = ?").get(p) as
       | { path: string; fp: string; mtime_ms: number; size: number; lang: string; indexed_at: number }
       | undefined;
     if (!row) return undefined;
@@ -148,15 +157,13 @@ class SqliteWarmStore implements WarmStore {
   }
 
   fileUpsert(rec: FileRecord): void {
-    this.db
-      .prepare(
-        "INSERT OR REPLACE INTO files (path, fp, mtime_ms, size, lang, indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-      .run(rec.path, rec.fp, rec.mtimeMs, rec.size, rec.lang, rec.indexedAt);
+    this.stmt(
+      "INSERT OR REPLACE INTO files (path, fp, mtime_ms, size, lang, indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(rec.path, rec.fp, rec.mtimeMs, rec.size, rec.lang, rec.indexedAt);
   }
 
   fileList(): FileRecord[] {
-    const rows = this.db.prepare("SELECT * FROM files").all() as Array<{
+    const rows = this.stmt("SELECT * FROM files").all() as Array<{
       path: string; fp: string; mtime_ms: number; size: number; lang: string; indexed_at: number;
     }>;
     return rows.map((r) => ({ path: r.path, fp: r.fp, mtimeMs: r.mtime_ms, size: r.size, lang: r.lang, indexedAt: r.indexed_at }));
@@ -164,21 +171,21 @@ class SqliteWarmStore implements WarmStore {
 
   fileDelete(p: string): void {
     this.transaction(() => {
-      this.db.prepare("DELETE FROM files WHERE path = ?").run(p);
-      this.db.prepare("DELETE FROM symbols WHERE file = ?").run(p);
-      this.db.prepare("DELETE FROM refs WHERE file = ?").run(p);
+      this.stmt("DELETE FROM files WHERE path = ?").run(p);
+      this.stmt("DELETE FROM symbols WHERE file = ?").run(p);
+      this.stmt("DELETE FROM refs WHERE file = ?").run(p);
     });
   }
 
   symbolsReplaceForFile(file: string, symbols: SymbolRecord[], refs: RefRecord[]): void {
     this.transaction(() => {
-      this.db.prepare("DELETE FROM symbols WHERE file = ?").run(file);
-      this.db.prepare("DELETE FROM refs WHERE file = ?").run(file);
-      const insSym = this.db.prepare(
+      this.stmt("DELETE FROM symbols WHERE file = ?").run(file);
+      this.stmt("DELETE FROM refs WHERE file = ?").run(file);
+      const insSym = this.stmt(
         "INSERT OR REPLACE INTO symbols (id, name, kind, file, line, end_line, signature) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       for (const s of symbols) insSym.run(s.id, s.name, s.kind, s.file, s.line, s.endLine, s.signature);
-      const insRef = this.db.prepare(
+      const insRef = this.stmt(
         "INSERT INTO refs (symbol_name, file, line, kind) VALUES (?, ?, ?, ?)",
       );
       for (const r of refs) insRef.run(r.symbolName, r.file, r.line, r.kind);
@@ -186,33 +193,32 @@ class SqliteWarmStore implements WarmStore {
   }
 
   symbolsByName(name: string): SymbolRecord[] {
-    const rows = this.db.prepare("SELECT * FROM symbols WHERE name = ?").all(name) as Array<{
+    const rows = this.stmt("SELECT * FROM symbols WHERE name = ?").all(name) as Array<{
       id: string; name: string; kind: string; file: string; line: number; end_line: number; signature: string;
     }>;
     return rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind, file: r.file, line: r.line, endLine: r.end_line, signature: r.signature }));
   }
 
   symbolsInFile(file: string): SymbolRecord[] {
-    const rows = this.db.prepare("SELECT * FROM symbols WHERE file = ? ORDER BY line").all(file) as Array<{
+    const rows = this.stmt("SELECT * FROM symbols WHERE file = ? ORDER BY line").all(file) as Array<{
       id: string; name: string; kind: string; file: string; line: number; end_line: number; signature: string;
     }>;
     return rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind, file: r.file, line: r.line, endLine: r.end_line, signature: r.signature }));
   }
 
   refsToSymbol(name: string, limit = 100): RefRecord[] {
-    const rows = this.db
-      .prepare("SELECT * FROM refs WHERE symbol_name = ? LIMIT ?")
+    const rows = this.stmt("SELECT * FROM refs WHERE symbol_name = ? LIMIT ?")
       .all(name, limit) as Array<{ symbol_name: string; file: string; line: number; kind: string }>;
     return rows.map((r) => ({ symbolName: r.symbol_name, file: r.file, line: r.line, kind: r.kind }));
   }
 
   symbolCount(): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS n FROM symbols").get() as { n: number };
+    const row = this.stmt("SELECT COUNT(*) AS n FROM symbols").get() as { n: number };
     return row.n;
   }
 
   httpGet(url: string): HttpRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM http WHERE url = ?").get(url) as
+    const row = this.stmt("SELECT * FROM http WHERE url = ?").get(url) as
       | { url: string; etag: string | null; last_modified: string | null; fp: string; fetched_at: number; ttl_at: number; status: number; content_type: string }
       | undefined;
     if (!row) return undefined;
@@ -223,11 +229,9 @@ class SqliteWarmStore implements WarmStore {
   }
 
   httpUpsert(rec: HttpRecord): void {
-    this.db
-      .prepare(
-        "INSERT OR REPLACE INTO http (url, etag, last_modified, fp, fetched_at, ttl_at, status, content_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(rec.url, rec.etag, rec.lastModified, rec.fp, rec.fetchedAt, rec.ttlAt, rec.status, rec.contentType);
+    this.stmt(
+      "INSERT OR REPLACE INTO http (url, etag, last_modified, fp, fetched_at, ttl_at, status, content_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(rec.url, rec.etag, rec.lastModified, rec.fp, rec.fetchedAt, rec.ttlAt, rec.status, rec.contentType);
   }
 
   transaction<T>(fn: () => T): T {

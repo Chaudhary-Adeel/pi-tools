@@ -70,22 +70,44 @@ export interface ExtractedFile {
 }
 
 /** Heuristic end-line: scan forward until indentation returns to the
- *  definition's level with content (or a closing brace at that level). */
+ *  definition's level with content (or a closing brace at that level),
+ *  then extend while braces are unbalanced so dedented content inside the
+ *  body (template literals, K&R variants) never truncates a definition. */
 function findEndLine(lines: string[], start: number): number {
   const defIndent = lines[start]!.match(/^\s*/)![0].length;
+  const cap = Math.min(lines.length, start + 400);
   let end = start;
-  for (let i = start + 1; i < Math.min(lines.length, start + 400); i++) {
+  for (let i = start + 1; i < cap; i++) {
     const line = lines[i]!;
     if (!line.trim()) continue;
     const indent = line.match(/^\s*/)![0].length;
     if (indent <= defIndent) {
       // Closing brace at def level belongs to the definition.
-      if (/^[\s})\]]*$/.test(line)) end = i;
+      if (/^[\s})\]]*;?$/.test(line)) end = i;
       break;
     }
     end = i;
   }
-  return end;
+
+  // Brace-balance safety net (no-op for brace-less languages like Python).
+  let balance = 0;
+  for (let i = start; i <= end; i++) {
+    for (const ch of lines[i]!) {
+      if (ch === "{") balance++;
+      else if (ch === "}") balance--;
+    }
+  }
+  let extended = end;
+  while (balance > 0 && extended + 1 < cap) {
+    extended++;
+    for (const ch of lines[extended]!) {
+      if (ch === "{") balance++;
+      else if (ch === "}") balance--;
+    }
+  }
+  // Balanced (possibly after extending) → use the extended end; still
+  // unbalanced at the cap → keep the conservative indentation-based end.
+  return balance <= 0 ? Math.max(end, extended) : end;
 }
 
 export function extractSymbols(content: string, file: string): ExtractedFile {

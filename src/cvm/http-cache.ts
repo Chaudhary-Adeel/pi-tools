@@ -86,7 +86,10 @@ export async function cachedFetch(
   const body = await res.text();
   const contentType = res.headers.get("content-type") ?? "";
 
-  if (res.status === 200) {
+  // Cap what we persist: brotliCompressSync on multi-MB bodies would block
+  // the event loop (and the TUI). Oversized bodies are returned uncached.
+  const MAX_CACHED_BODY = 4 * 1024 * 1024;
+  if (res.status === 200 && body.length <= MAX_CACHED_BODY) {
     const fp = coldPut(cwd, body);
     // Honor Cache-Control: no-store by not persisting at all.
     const cc = res.headers.get("cache-control") ?? "";

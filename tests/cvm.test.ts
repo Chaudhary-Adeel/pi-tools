@@ -269,6 +269,30 @@ describe("context resolution", () => {
     assert.ok(!deps.includes("function"));
   });
 
+  test("staleness guard: resolve reflects an edit immediately, despite debounce", async () => {
+    write("src/live.ts", "export function target() {\n  return 'v1';\n}\n");
+    await indexRepo(tmpDir, { force: true });
+    const before = await resolveContext(tmpDir, "target");
+    assert.match(before.markdown, /'v1'/);
+
+    // Edit within the debounce window — no manual reindex, no debounce reset.
+    write("src/live.ts", "// moved\n\nexport function target() {\n  return 'v2-edited';\n}\n");
+    const after = await resolveContext(tmpDir, "target");
+    assert.ok(after.found);
+    assert.match(after.markdown, /'v2-edited'/, "must serve post-edit source");
+    assert.ok(!after.markdown.includes("'v1'"), "must not serve stale source");
+  });
+
+  test("brace balance: dedented template-literal lines don't truncate a definition", async () => {
+    write(
+      "src/tpl.ts",
+      "export function tpl() {\n  const s = `\nraw\ndedented lines\n`;\n  return s + finish();\n}\n",
+    );
+    await indexRepo(tmpDir, { force: true });
+    const res = await resolveContext(tmpDir, "tpl");
+    assert.match(res.markdown, /return s \+ finish\(\)/, "body must include code after the dedent");
+  });
+
   test("metrics accumulate", async () => {
     write("src/a.ts", "export function solo() { return 1; }\n");
     await indexRepo(tmpDir, { force: true });
