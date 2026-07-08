@@ -3,6 +3,8 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, firstText, truncate, htmlToText, formatBytes } from "../lib/shared.ts";
+import { cachedFetch } from "../cvm/http-cache.ts";
+import { deltaCheck, deltaRecord } from "../cvm/delta.ts";
 
 const UA =
   "Mozilla/5.0 (compatible; pi-coding-toolkit/0.1; +https://pi.dev)";
@@ -72,36 +74,58 @@ export function registerWebTools(pi: ExtensionAPI): void {
             "(useful for JSON/XML/plaintext endpoints).",
         }),
       ),
+      force_full: Type.Optional(
+        Type.Boolean({
+          description:
+            "Return full content even if this URL was already fetched " +
+            "unchanged (use after compaction, when it's no longer in context).",
+        }),
+      ),
     }),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const { url, max_chars, raw } = params;
       const urlError = validateUrl(url);
       if (urlError) throw new Error(urlError);
-      let res: Response;
+      // CVM HTTP cache: fresh copies skip the network entirely; stale ones
+      // revalidate with ETag/Last-Modified and 304s cost no download.
+      let res: Awaited<ReturnType<typeof cachedFetch>>;
       try {
-        res = await fetch(url, {
+        res = await cachedFetch(ctx.cwd, url, {
           headers: { "User-Agent": UA, Accept: "*/*" },
-          redirect: "follow",
           signal,
+          ttlMs: 5 * 60_000,
         });
       } catch (e) {
         throw new Error(`Network error fetching ${url}: ${(e as Error).message}`);
       }
-      const ct = res.headers.get("content-type") ?? "";
-      const body = await res.text();
+      const ct = res.contentType;
+      const body = res.body;
       const isHtml = /text\/html|application\/xhtml/i.test(ct);
       const out = raw || !isHtml ? body : htmlToText(body);
       const finalText = truncate(out, max_chars ?? 30_000);
-      const header = `HTTP ${res.status} ${res.statusText} — ${url}\nContent-Type: ${ct}\n\n`;
-      return text(header + finalText, {
+      const cacheNote = res.source === "network" ? "" : ` [cvm: ${res.source}]`;
+      const header = `HTTP ${res.status}${cacheNote} — ${url}\nContent-Type: ${ct}\n\n`;
+      const details = {
         status: res.status,
         contentType: ct,
-        finalUrl: res.url,
+        finalUrl: res.finalUrl,
         charCount: finalText.length,
         byteCount: body.length,
         isHtml,
         raw: raw ?? false,
-      });
+        cacheSource: res.source,
+      };
+
+      // Delta mode: an unchanged page the model already saw becomes a stub.
+      const deltaKey = `web:${url}:${raw ? "raw" : "text"}:${max_chars ?? 30_000}`;
+      if (!params.force_full) {
+        const delta = deltaCheck(deltaKey, finalText);
+        if (delta.kind === "unchanged") return text(header + delta.stub, { ...details, delta: "unchanged" });
+        if (delta.kind === "diff") return text(header + delta.diff, { ...details, delta: "diff" });
+      } else {
+        deltaRecord(deltaKey, finalText);
+      }
+      return text(header + finalText, details);
     },
     renderCall(args, theme, _context) {
       let t = theme.fg("toolTitle", theme.bold("web_fetch "));

@@ -13,6 +13,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, firstText, truncate } from "../lib/shared.ts";
+import { deltaCheck, deltaRecord } from "../cvm/delta.ts";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,13 @@ export function registerFileTools(pi: ExtensionAPI): void {
       limit: Type.Optional(
         Type.Number({ description: "Max lines to read (default all)." }),
       ),
+      force_full: Type.Optional(
+        Type.Boolean({
+          description:
+            "Return full content even if this exact range was already read " +
+            "unchanged (use after compaction, when it's no longer in context).",
+        }),
+      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const file = resolve(ctx, params.path);
@@ -108,13 +116,26 @@ export function registerFileTools(pi: ExtensionAPI): void {
         const slice = lines
           .map((l, i) => `${String(start + i).padStart(6)}\t${l}`)
           .join("\n");
-        return text(truncate(slice), {
+        const body = truncate(slice);
+        const details = {
           path: file,
           totalLines,
           start,
           end: start + lines.length - 1,
           linesRead: lines.length,
-        });
+        };
+
+        // CVM delta mode: identical repeat reads return a stub; changed
+        // files return a compact diff against what the model last saw.
+        const deltaKey = `read:${file}:${start}:${params.limit ?? "all"}`;
+        if (!params.force_full) {
+          const delta = deltaCheck(deltaKey, body);
+          if (delta.kind === "unchanged") return text(delta.stub, { ...details, delta: "unchanged" });
+          if (delta.kind === "diff") return text(delta.diff, { ...details, delta: "diff" });
+        } else {
+          deltaRecord(deltaKey, body);
+        }
+        return text(body, details);
       } catch (e) {
         throw new Error(`Cannot read ${shortPath(ctx, file)}: ${(e as Error).message}`);
       }

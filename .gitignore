@@ -5,3 +5,4 @@ package-lock.json
 .pi/tasks.json
 .pi/newtask/
 .pi/pi-tools.json
+.pi/cvm/
