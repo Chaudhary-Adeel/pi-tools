@@ -54,6 +54,12 @@ const CONNECTORS: Connector[] = [
     surface: ["context_resolve", "/cvm"],
   },
   {
+    name: "Quiet Output",
+    what: "Compacts oversized tool output (built-ins included) before it reaches the model",
+    surface: ["read_artifact"],
+    needs: "Runs automatically; disable with /config quietOutput off",
+  },
+  {
     name: "Subagents",
     what: "Parallel pi subprocesses with isolated context",
     surface: ["spawn_subagents", "/agents", "/newTask"],

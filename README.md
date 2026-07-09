@@ -19,6 +19,7 @@ Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 | `glob_files` | Find files by `**/*.ext`-style pattern |
 | `code_references` | Trace a symbol across files: definitions, imports, call sites with context — progressive code understanding before editing |
 | `context_resolve` | CVM symbol-level retrieval: exact source + dependency signatures + callers with confidence scoring — instead of whole files |
+| `read_artifact` | Retrieve the full text behind a Quiet Output compacted preview, by fingerprint |
 | `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
 | `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
@@ -84,6 +85,17 @@ A layered context engine ([docs/CVM.md](docs/CVM.md)) that delivers the **smalle
 - **HTTP cache** — ETag/Last-Modified revalidation for `web_fetch` and `github_explore`; 304s cost no download (and don't burn GitHub rate limits).
 - **`/cvm`** — tokens saved, hit ratios, index and storage stats; `/cvm index` forces a reindex.
 
+### Quiet Output
+
+Compacts oversized tool output — including Pi's **built-in** tools (`read`, `bash`, `grep`, `find`, `ls`), not just this package's own — before it reaches the model. Complements the rest of the CVM, which is about not re-sending *unchanged* content; this handles the orthogonal case of a single output that's simply too big the first time (a huge `bash` stdout dump, a `grep` with thousands of hits, a full-file `read` with no limit):
+
+- **Deterministic, never AI summarization** — output over ~12,000 chars or 240 lines is replaced with a head+tail preview (100+60 lines normally, 160+120 for errors, since diagnostics matter more)
+- **Nothing is lost** — the full text is stashed in the CVM's content-addressed cold store (free dedup + brotli compression) and retrievable with the new `read_artifact` tool via the fingerprint shown in the preview
+- **Only reshapes what the model sees, never the transcript** — this runs on the `context` event (fired before each LLM request), not on the tool result itself, so the terminal's scrollback and each tool's own rendered summary are completely unaffected; only the outbound API request is compacted
+- **`read` gets a default 120-line cap** when the model doesn't specify one, preventing accidental full-file dumps (skipped for images/binaries)
+- Compaction stats are memoized by content fingerprint, so a large historical output isn't re-processed on every subsequent turn — only the first time it's seen
+- `/config quietOutput off` disables it; stats appear in `/cvm`'s report
+
 ### Memory Health Engine
 
 Keeps `.pi/memory/` accurate, minimal, and self-healing over time — autonomously, without an LLM rewriting content:
@@ -148,6 +160,7 @@ npm install
 - `subagentModel` — lighter model for subagents and `/newTask` (default: inherit session model)
 - `autoDelegate` — delegation-harness hints/nudges, `on`/`off` (default: on)
 - `memoryHealth` — autonomous memory-healing sweeps, `on`/`off` (default: on; `/heal` always works regardless)
+- `quietOutput` — compact oversized tool output before the model sees it (built-in tools included), `on`/`off` (default: on)
 
 **Environment variables:**
 - `TAVILY_API_KEY` — enables Tavily-backed `web_search` (falls back to DuckDuckGo otherwise)
@@ -182,6 +195,7 @@ pi-tools/
 │   ├── tasks.test.ts
 │   ├── code-references.test.ts
 │   ├── harness.test.ts
+│   ├── quiet-output.test.ts
 │   └── cvm.test.ts
 ├── .pi/memory/                  # agent's persistent memory
 │   ├── memory-map.md            #   auto-generated index
@@ -206,6 +220,7 @@ pi-tools/
     │   ├── harness-register.ts  # harness event wiring + /harness command
     │   ├── memory-health.ts     # Memory Health Engine — score/validate/heal
     │   ├── memory-health-register.ts # autonomy wiring + /heal command
+    │   ├── quiet-output-register.ts # Quiet Output event wiring (context + tool_call)
     │   ├── memory.ts            # two-tier memory system + auto-bootstrap
     │   ├── memory-map.ts        # footprint computation + map generation
     │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory/tasks injection
@@ -223,7 +238,9 @@ pi-tools/
         ├── files.ts             # read_file
         ├── search.ts            # grep_search, glob_files
         ├── code-references.ts   # code_references
+        ├── context-resolve.ts   # context_resolve
         ├── github-explore.ts    # github_explore
+        ├── read-artifact.ts     # read_artifact
         ├── tasks.ts             # tasks
         ├── ask.ts               # ask_user
         ├── subagents.ts         # spawn_subagents (+ runSubagent for /newTask)

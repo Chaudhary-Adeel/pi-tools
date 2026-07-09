@@ -39,6 +39,8 @@ import { registerGitHubExploreTool } from "./tools/github-explore.ts";
 import { registerCodeReferencesTool } from "./tools/code-references.ts";
 import { registerTaskTool } from "./tools/tasks.ts";
 import { registerContextResolveTool } from "./tools/context-resolve.ts";
+import { registerReadArtifactTool } from "./tools/read-artifact.ts";
+import { registerQuietOutput } from "./lib/quiet-output-register.ts";
 import { registerCvmCommand } from "./commands/cvm-command.ts";
 import { resetDeltaLedger } from "./cvm/delta.ts";
 import { resetCvmMetrics } from "./cvm/metrics.ts";
@@ -65,6 +67,7 @@ export default function (pi: ExtensionAPI): void {
   registerCodeReferencesTool(pi); // code_references — progressive code understanding
   registerTaskTool(pi); //       tasks — structured session task list
   registerContextResolveTool(pi); // context_resolve — CVM symbol-level retrieval
+  registerReadArtifactTool(pi); // read_artifact — retrieve full text behind a compacted output
 
   // Operating prompt (token efficiency + parallelism/subagent strategy).
   registerPrompt(pi);
@@ -120,6 +123,11 @@ export default function (pi: ExtensionAPI): void {
   // Memory Health Engine — autonomous scoring/validation/healing of
   // .pi/memory against the live codebase, plus the /heal command.
   registerMemoryHealth(pi);
+
+  // Quiet Output — compacts any oversized tool output (built-ins included)
+  // to a head+tail preview before it reaches the model; caps unlimited
+  // read() calls at a sane default. Stats surface in /cvm.
+  registerQuietOutput(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {
