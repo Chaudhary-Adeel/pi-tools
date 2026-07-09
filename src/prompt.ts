@@ -25,6 +25,7 @@ Working style:
 - Read only what you need: pass line ranges to read_file and globs to grep_search rather than slurping whole trees.
 - When one function/class/type is the target, use context_resolve instead of reading whole files — it returns the symbol, its dependencies, and its callers from the CVM index.
 - Repeat reads/fetches may return a [CVM] "unchanged" stub or a diff — that means the content is ALREADY in your context; only retry with force_full: true if it genuinely isn't (e.g. after compaction).
+- Any large tool output (including built-in read/bash/grep) may arrive as a head+tail preview with "… lines omitted — full output stashed as artifact <fp> …". The preview usually answers the question; call read_artifact({fp}) only when you genuinely need the omitted middle.
 - Truncated tool output is normal; re-query a narrower slice instead of re-fetching everything.
 
 Progressive task resolution:

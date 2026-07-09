@@ -16,6 +16,7 @@ export interface CVMMetrics {
   delta: { unchangedReturns: number; diffReturns: number; fullReturns: number };
   symbols: { filesParsed: number; filesReused: number; lookups: number };
   context: { resolves: number; expansions: number; avgConfidence: number };
+  quietOutput: { compactions: number; readLimitApplied: number };
   tokensSaved: number;
 }
 
@@ -27,6 +28,7 @@ function emptyMetrics(): CVMMetrics {
     delta: { unchangedReturns: 0, diffReturns: 0, fullReturns: 0 },
     symbols: { filesParsed: 0, filesReused: 0, lookups: 0 },
     context: { resolves: 0, expansions: 0, avgConfidence: 0 },
+    quietOutput: { compactions: 0, readLimitApplied: 0 },
     tokensSaved: 0,
   };
 }
@@ -72,5 +74,7 @@ export function formatCvmMetrics(): string {
       `${m.symbols.filesParsed} parsed, ${m.symbols.lookups} lookups`,
     `  context resolves:         ${m.context.resolves} (${m.context.expansions} auto-expansions, ` +
       `avg confidence ${(m.context.avgConfidence * 100).toFixed(0)}%)`,
+    `  quiet output:             ${m.quietOutput.compactions} large output(s) compacted, ` +
+      `${m.quietOutput.readLimitApplied} read() call(s) capped`,
   ].join("\n");
 }

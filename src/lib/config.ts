@@ -27,6 +27,9 @@ export interface PiToolsConfig {
   /** Memory Health Engine (autonomous scoring/healing of .pi/memory).
    *  "off"/"false" disables sweeps; /heal still works. Default: on. */
   memoryHealth?: string | boolean;
+  /** Quiet Output (compact oversized tool output before it reaches the
+   *  model). "off"/"false" disables compaction. Default: on. */
+  quietOutput?: string | boolean;
 }
 
 export const CONFIG_DEFAULTS: Required<Pick<PiToolsConfig, "greetingName" | "gitName" | "gitEmail">> = {
@@ -121,4 +124,9 @@ export function isAutoDelegateEnabled(cwd: string): boolean {
 /** Whether autonomous memory-health sweeps are enabled. Default: on. */
 export function isMemoryHealthEnabled(cwd: string): boolean {
   return toggleEnabled(loadConfig(cwd).memoryHealth);
+}
+
+/** Whether Quiet Output compaction is enabled. Default: on. */
+export function isQuietOutputEnabled(cwd: string): boolean {
+  return toggleEnabled(loadConfig(cwd).quietOutput);
 }

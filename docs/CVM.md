@@ -36,6 +36,7 @@ LLM ⇄ tools (read_file, web_fetch, github_explore, context_resolve)
    ├─ Context engine ─ symbol-level retrieval + confidence           src/cvm/context.ts
    ├─ Delta mode ───── session ledger: stubs + compact diffs         src/cvm/delta.ts
    ├─ HTTP cache ───── fresh / revalidated (304) / network           src/cvm/http-cache.ts
+   ├─ Quiet Output ─── compacts oversized output (built-ins too)     src/cvm/quiet-output.ts
    └─ Metrics ──────── tokens saved, hit ratios (/cvm)               src/cvm/metrics.ts
 ```
 
@@ -53,6 +54,7 @@ session-scoped (a fresh context has seen nothing).
 | Context Confidence Engine with auto-expansion | ✅ implemented |
 | Delta mode (unchanged stubs, compact diffs) | ✅ implemented for `read_file` / `web_fetch` |
 | HTTP cache (ETag, Last-Modified, no-store, dedup) | ✅ implemented; wired into `web_fetch` + `github_explore` |
+| Quiet Output — compact oversized output, including built-in tools | ✅ implemented; runs on the `context` event so history/UI stay intact, only the outbound request is compacted; `read_artifact` recovers the full text |
 | Observability (`/cvm`, tokens saved, hit ratios) | ✅ implemented |
 | Tree-sitter ASTs, partial reparse | 🔜 roadmap — needs a native dep; current extractor is regex+indentation |
 | Embeddings / semantic similarity ranking | 🔜 roadmap — needs a model or API |
