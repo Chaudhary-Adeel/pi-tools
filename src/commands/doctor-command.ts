@@ -18,7 +18,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { findMemoryRoot, loadProgress } from "../lib/memory.ts";
 import { computeFootprint } from "../lib/memory-map.ts";
-import { formatBytes } from "../lib/shared.ts";
+import { formatBytes, jaccardWordSimilarity } from "../lib/shared.ts";
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -36,21 +36,6 @@ interface DoctorReport {
   memoryRoot: string | null;
   systemCount: number;
   learningCount: number;
-}
-
-// ── similarity heuristic ───────────────────────────────────────────────────
-
-/** Jaccard-like similarity on word trigrams. Returns 0–1. */
-function descriptionSimilarity(a: string, b: string): number {
-  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
-  if (wordsA.size === 0 || wordsB.size === 0) return 0;
-  let intersection = 0;
-  for (const w of wordsA) {
-    if (wordsB.has(w)) intersection++;
-  }
-  const union = wordsA.size + wordsB.size - intersection;
-  return intersection / union;
 }
 
 // ── checks ──────────────────────────────────────────────────────────────────
@@ -164,7 +149,7 @@ function runChecks(cwd: string): DoctorReport {
       const b = learningFiles[j]!;
       const descB = String(b.frontmatter.description ?? "");
       if (!descB) continue;
-      const sim = descriptionSimilarity(descA, descB);
+      const sim = jaccardWordSimilarity(descA, descB);
       if (sim > 0.65) {
         duplicates.push(`${a.relPath} ↔ ${b.relPath} (${(sim * 100).toFixed(0)}% similar)`);
       }

@@ -45,6 +45,7 @@ import { resetCvmMetrics } from "./cvm/metrics.ts";
 import { indexRepo } from "./cvm/symbols.ts";
 import { getGreetingName, getGitIdentity } from "./lib/config.ts";
 import { registerDelegationHarness } from "./lib/harness-register.ts";
+import { registerMemoryHealth } from "./lib/memory-health-register.ts";
 import { getRepoName } from "./lib/shared.ts";
 import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
 
@@ -115,6 +116,10 @@ export default function (pi: ExtensionAPI): void {
 
   // /cvm — Context Virtual Memory stats + manual reindex.
   registerCvmCommand(pi);
+
+  // Memory Health Engine — autonomous scoring/validation/healing of
+  // .pi/memory against the live codebase, plus the /heal command.
+  registerMemoryHealth(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {
@@ -378,7 +383,6 @@ function autoBootstrapMemory(cwd: string): void {
   try {
     const pkgPath = path.join(cwd, "package.json");
     const tsconfigPath = path.join(cwd, "tsconfig.json");
-    const srcDir = path.join(cwd, "src");
 
     const pkg = fs.existsSync(pkgPath)
       ? JSON.parse(fs.readFileSync(pkgPath, "utf-8"))

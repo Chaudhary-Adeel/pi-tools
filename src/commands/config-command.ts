@@ -30,6 +30,7 @@ const FIELDS: Field[] = [
   { key: "greetingName", label: "Greetings name", hint: "name shown in the footer" },
   { key: "subagentModel", label: "Subagent model", hint: "lighter model for spawn_subagents (empty = inherit)" },
   { key: "autoDelegate", label: "Auto-delegate", hint: "delegation harness hints/nudges: on or off (default on)" },
+  { key: "memoryHealth", label: "Memory health", hint: "autonomous memory healing sweeps: on or off (default on)" },
 ];
 
 function effectiveValue(cfg: PiToolsConfig, key: keyof PiToolsConfig): string {

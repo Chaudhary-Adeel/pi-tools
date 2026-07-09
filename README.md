@@ -45,6 +45,7 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 | `/agents` | Show subagent setup: main/subagent model, nesting policy, presets (explorer, coder, reviewer, tester) |
 | `/newTask` | Run a task in a fresh subagent: `/newTask <prompt>` (standard) or `/newTask background <prompt>` (detached, logged to `.pi/newtask/`, tracked in tasks.json). Preset prefix: `/newTask reviewer: …` |
 | `/harness` | Delegation-harness stats: research calls, subagent fan-outs, delegation ratio, nudges sent |
+| `/heal` | Memory Health Engine: score, validate, and heal `.pi/memory` now (`/heal dry` to preview) |
 | `/skill:browser` | Loads browser automation instructions into context |
 
 **Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
@@ -82,6 +83,20 @@ A layered context engine ([docs/CVM.md](docs/CVM.md)) that delivers the **smalle
 - **Delta mode** — repeat `read_file`/`web_fetch` of unchanged content returns a short `[CVM] unchanged` stub; changed content returns a compact diff. `force_full: true` recovers after compaction.
 - **HTTP cache** — ETag/Last-Modified revalidation for `web_fetch` and `github_explore`; 304s cost no download (and don't burn GitHub rate limits).
 - **`/cvm`** — tokens saved, hit ratios, index and storage stats; `/cvm index` forces a reindex.
+
+### Memory Health Engine
+
+Keeps `.pi/memory/` accurate, minimal, and self-healing over time — autonomously, without an LLM rewriting content:
+
+- **Scores** every memory file 0–100 (frontmatter validity, freshness, code-reference validity, duplication, size)
+- **Validates** file-path and symbol references in learnings against the *live* codebase (via the CVM symbol index) — not just against what was true when the learning was written
+- **Reconciles** dead paths: a reference whose basename now exists in exactly one place is rewritten to the new location; genuinely ambiguous or missing references are left alone and just flagged
+- **Deduplicates** near-identical learnings (Jaccard similarity on description+body) — the older/weaker one is archived, never deleted
+- **Compresses** deterministically (trailing whitespace, blank-line runs) — never inside fenced code blocks, never a semantic rewrite
+- **Expires** low-score, long-stale learnings into `.pi/memory/archive/`
+- System memory (`system/*.md`) is treated conservatively: repaired and reference-fixed, but never archived; `progress.md` and `memory-map.md` are never touched
+
+Runs automatically in the background at session start (debounced to once per 6 hours) and immediately after any turn that edits `.pi/memory/`. `/heal` runs it on demand (`/heal dry` to preview without applying); `/config memoryHealth off` disables autonomous sweeps.
 
 ### Delegation Harness
 
@@ -132,6 +147,7 @@ npm install
 - `greetingName` — name shown in the footer (default: Muhammad Adeel Chaudhary)
 - `subagentModel` — lighter model for subagents and `/newTask` (default: inherit session model)
 - `autoDelegate` — delegation-harness hints/nudges, `on`/`off` (default: on)
+- `memoryHealth` — autonomous memory-healing sweeps, `on`/`off` (default: on; `/heal` always works regardless)
 
 **Environment variables:**
 - `TAVILY_API_KEY` — enables Tavily-backed `web_search` (falls back to DuckDuckGo otherwise)
@@ -161,9 +177,12 @@ pi-tools/
 ├── tests/                       # test suite
 │   ├── memory.test.ts
 │   ├── memory-map.test.ts
+│   ├── memory-health.test.ts
 │   ├── config.test.ts
 │   ├── tasks.test.ts
-│   └── code-references.test.ts
+│   ├── code-references.test.ts
+│   ├── harness.test.ts
+│   └── cvm.test.ts
 ├── .pi/memory/                  # agent's persistent memory
 │   ├── memory-map.md            #   auto-generated index
 │   ├── system/                  #   injected every turn
@@ -185,6 +204,8 @@ pi-tools/
     ├── lib/
     │   ├── harness.ts           # delegation heuristics + nudge state machine
     │   ├── harness-register.ts  # harness event wiring + /harness command
+    │   ├── memory-health.ts     # Memory Health Engine — score/validate/heal
+    │   ├── memory-health-register.ts # autonomy wiring + /heal command
     │   ├── memory.ts            # two-tier memory system + auto-bootstrap
     │   ├── memory-map.ts        # footprint computation + map generation
     │   ├── deepseek-prompt.ts   # model-aware coding prompt + memory/tasks injection
