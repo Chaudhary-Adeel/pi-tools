@@ -43,6 +43,17 @@ const CONNECTORS: Connector[] = [
     surface: ["memory_map", "memory_search", "/memory", "/learn", "/doctor", "/consolidate", "/init"],
   },
   {
+    name: "Memory Health Engine",
+    what: "Autonomous scoring/validation/dedup/compression/expiry of .pi/memory against the live codebase",
+    surface: ["/heal"],
+    needs: "Runs automatically; disable with /config memoryHealth off",
+  },
+  {
+    name: "Context Virtual Memory",
+    what: "Smallest-complete-context retrieval: symbol index, delta mode, HTTP cache",
+    surface: ["context_resolve", "/cvm"],
+  },
+  {
     name: "Subagents",
     what: "Parallel pi subprocesses with isolated context",
     surface: ["spawn_subagents", "/agents", "/newTask"],

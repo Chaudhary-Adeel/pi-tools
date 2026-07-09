@@ -62,6 +62,23 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+/** Jaccard similarity over word sets (words >2 chars, case-insensitive).
+ *  0 = disjoint, 1 = identical vocabulary. Used for lightweight duplicate
+ *  detection (memory learnings, descriptions) — not a semantic embedding,
+ *  just word overlap, which is enough to catch near-identical prose. */
+export function jaccardWordSimilarity(a: string, b: string): number {
+  const words = (s: string) =>
+    new Set(s.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+  const wordsA = words(a);
+  const wordsB = words(b);
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  return intersection / (wordsA.size + wordsB.size - intersection);
+}
+
 /** Convert a glob pattern (supports **, *, ?) into a RegExp. */
 export function globToRegExp(glob: string): RegExp {
   let re = "";

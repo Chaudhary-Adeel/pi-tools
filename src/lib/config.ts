@@ -24,6 +24,9 @@ export interface PiToolsConfig {
   /** Delegation harness (auto subagent-utilization steering). "off"/"false"
    *  disables hints and nudges. Default: on. */
   autoDelegate?: string | boolean;
+  /** Memory Health Engine (autonomous scoring/healing of .pi/memory).
+   *  "off"/"false" disables sweeps; /heal still works. Default: on. */
+  memoryHealth?: string | boolean;
 }
 
 export const CONFIG_DEFAULTS: Required<Pick<PiToolsConfig, "greetingName" | "gitName" | "gitEmail">> = {
@@ -104,10 +107,18 @@ export function getSubagentModel(cwd: string): string | undefined {
   return process.env.PI_SUBAGENT_MODEL || loadConfig(cwd).subagentModel || undefined;
 }
 
-/** Whether the delegation harness (hints + nudges) is enabled. Default: on. */
-export function isAutoDelegateEnabled(cwd: string): boolean {
-  const v = loadConfig(cwd).autoDelegate;
+function toggleEnabled(v: string | boolean | undefined): boolean {
   if (v === false) return false;
   if (typeof v === "string" && /^(off|false|0|no|disabled)$/i.test(v.trim())) return false;
   return true;
+}
+
+/** Whether the delegation harness (hints + nudges) is enabled. Default: on. */
+export function isAutoDelegateEnabled(cwd: string): boolean {
+  return toggleEnabled(loadConfig(cwd).autoDelegate);
+}
+
+/** Whether autonomous memory-health sweeps are enabled. Default: on. */
+export function isMemoryHealthEnabled(cwd: string): boolean {
+  return toggleEnabled(loadConfig(cwd).memoryHealth);
 }

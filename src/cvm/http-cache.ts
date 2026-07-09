@@ -10,7 +10,6 @@
 // Only 200 responses are cached. Bodies are deduplicated automatically: two
 // URLs with identical content share one cold object.
 
-import { fingerprint } from "./fingerprint.ts";
 import { coldGet, coldPut } from "./cold-store.ts";
 import { cvmMetrics } from "./metrics.ts";
 import { getWarmStore } from "./warm-store.ts";
@@ -108,9 +107,4 @@ export async function cachedFetch(
   }
 
   return { status: res.status, contentType, body, source: "network", finalUrl: res.url || url };
-}
-
-/** Ledger-independent content fingerprint of a body (for delta keys). */
-export function bodyFingerprint(body: string): string {
-  return fingerprint(body);
 }

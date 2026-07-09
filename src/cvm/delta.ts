@@ -109,11 +109,6 @@ export function deltaRecord(key: string, content: string): void {
   ledger.set(key, { fp: fingerprint(content), content });
 }
 
-/** Forget one key. */
-export function deltaForget(key: string): void {
-  ledger.delete(key);
-}
-
 /** Reset on session start — a fresh context has seen nothing. */
 export function resetDeltaLedger(): void {
   ledger.clear();
