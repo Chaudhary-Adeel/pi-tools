@@ -61,8 +61,8 @@ const CONNECTORS: Connector[] = [
   },
   {
     name: "Subagents",
-    what: "Parallel pi subprocesses with isolated context",
-    surface: ["spawn_subagents", "/agents", "/newTask"],
+    what: "Parallel pi subprocesses with isolated context; background mode; full activity traces",
+    surface: ["spawn_subagents", "/agents", "/newTask", "/subagents"],
     needs: "Optional lighter model via /config subagentModel",
   },
   {

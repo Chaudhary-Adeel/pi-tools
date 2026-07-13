@@ -35,6 +35,7 @@ import { registerConfigCommand } from "./commands/config-command.ts";
 import { registerConnectorsCommand } from "./commands/connectors-command.ts";
 import { registerAgentsCommand } from "./commands/agents-command.ts";
 import { registerNewTaskCommand } from "./commands/new-task-command.ts";
+import { registerSubagentsCommand } from "./commands/subagents-command.ts";
 import { registerGitHubExploreTool } from "./tools/github-explore.ts";
 import { registerCodeReferencesTool } from "./tools/code-references.ts";
 import { registerTaskTool } from "./tools/tasks.ts";
@@ -112,6 +113,9 @@ export default function (pi: ExtensionAPI): void {
 
   // /newTask — kick off a task in a fresh subagent (standard or background).
   registerNewTaskCommand(pi);
+
+  // /subagents — inspect subagent runs: full prompts + activity traces.
+  registerSubagentsCommand(pi);
 
   // Delegation harness — active subagent-utilization steering: prompt-shape
   // hints, research-streak nudges, context-pressure nudges, /harness stats.

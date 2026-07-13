@@ -23,7 +23,7 @@ Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 | `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
 | `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
-| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked |
+| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked; `background: true` to start the batch and keep working instead of blocking; every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 | `memory_search` | Search across all memory files (system + learnings) for a query |
 
@@ -45,6 +45,7 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 | `/connectors` | List the connectors this package provides (tools, commands, requirements, active state) |
 | `/agents` | Show subagent setup: main/subagent model, nesting policy, presets (explorer, coder, reviewer, tester) |
 | `/newTask` | Run a task in a fresh subagent: `/newTask <prompt>` (standard) or `/newTask background <prompt>` (detached, logged to `.pi/newtask/`, tracked in tasks.json). Preset prefix: `/newTask reviewer: …` |
+| `/subagents` | Inspect subagent runs: `/subagents` lists recent runs, `/subagents <runId>` shows a run's summary, `/subagents <runId> <n>` shows one subagent's full prompt + complete activity trace + result |
 | `/harness` | Delegation-harness stats: research calls, subagent fan-outs, delegation ratio, nudges sent |
 | `/heal` | Memory Health Engine: score, validate, and heal `.pi/memory` now (`/heal dry` to preview) |
 | `/skill:browser` | Loads browser automation instructions into context |
@@ -119,6 +120,8 @@ Prompt rules alone don't make a model fan out — so pi-tools extends Pi's harne
 - **Context-pressure nudges** — past 60% context usage with research still running, the harness suggests delegating the rest with `output_to_files: true` (once per session).
 - **`/harness`** — live stats: research calls, fan-outs, delegation ratio, hints/nudges sent.
 - Disable with `/config autoDelegate off`. Subagent processes are excluded automatically (they can't spawn).
+
+**Subagent observability & non-blocking runs.** The live activity widget only ever shows each subagent's *latest* action and disappears after the run — previously that was the only visibility into what a subagent actually did, and it was lost the moment a new event overwrote it. Every run now persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` also accepts `background: true` — mirroring `/newTask`'s background mode but for a whole parallel batch — which starts the fan-out and returns immediately instead of blocking the calling turn, so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes.
 
 ### Smart Prompting
 
@@ -196,11 +199,8 @@ pi-tools/
 │   ├── code-references.test.ts
 │   ├── harness.test.ts
 │   ├── quiet-output.test.ts
+│   ├── subagent-trace.test.ts
 │   └── cvm.test.ts
-├── .pi/memory/                  # agent's persistent memory
-│   ├── memory-map.md            #   auto-generated index
-│   ├── system/                  #   injected every turn
-│   └── learnings/               #   on-demand
 └── src/
     ├── index.ts                 # entry point: registers tools, commands, hooks
     ├── prompt.ts                # token-efficient operating prompt
@@ -214,7 +214,8 @@ pi-tools/
     │   ├── config-command.ts    # /config — settings editor
     │   ├── connectors-command.ts # /connectors — connector inventory
     │   ├── agents-command.ts    # /agents — subagent presets + model info
-    │   └── new-task-command.ts  # /newTask — standard/background subagent runs
+    │   ├── new-task-command.ts  # /newTask — standard/background subagent runs
+    │   └── subagents-command.ts # /subagents — inspect subagent run traces
     ├── lib/
     │   ├── harness.ts           # delegation heuristics + nudge state machine
     │   ├── harness-register.ts  # harness event wiring + /harness command
@@ -231,6 +232,7 @@ pi-tools/
     │   ├── agents.ts            # subagent presets
     │   ├── learn.ts             # session distillation + auto-capture
     │   ├── subagent-tokens.ts   # cross-process subagent token tracking
+    │   ├── subagent-trace.ts    # persistent per-subagent prompt+activity+result trace
     │   ├── walk.ts              # directory tree walker
     │   └── shared.ts            # shared helpers (text, firstText, getRepoName, …)
     └── tools/

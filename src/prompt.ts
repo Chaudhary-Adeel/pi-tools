@@ -41,6 +41,8 @@ Parallelism:
 - Each subagent prompt must stand alone: it can't see this conversation — include every path, fact, and constraint it needs. Only conclusions come back, tagged with a completed subagent id (e.g. sub-2-4fd1) for later reference.
 - Don't spawn subagents for a single linear task or for steps that must run in order. Subagents cannot spawn subagents.
 - For large subagent results (file analysis, code reviews, extensive reports), use output_to_files: true so results are written to temp files instead of filling up the main context window. Read the files with Pi's built-in read tool when you need the full output.
+- spawn_subagents blocks this turn until every subagent finishes by default. For a substantial fan-out (3+ subagents, or work likely to take a while), set background: true instead — you get an immediate acknowledgment and can keep working (implement the parts that don't depend on their findings, or continue other work) rather than sitting idle. You'll get a message here when the batch completes.
+- Every subagent's full prompt and complete tool-by-tool activity trace is always recorded, not just its final answer — use /subagents <runId> or read the trace file (path given in the result) when you need to see exactly what it did, not just what it concluded.
 - ask_user ONLY when blocked on a decision that is genuinely the user's to make; otherwise pick a sensible default and proceed.
 
 Git discipline:
