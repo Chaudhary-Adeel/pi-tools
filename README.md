@@ -1,12 +1,48 @@
 # pi-tools
 
 A batteries-included [Pi](https://pi.dev) package: coding tools, browser
-automation, persistent memory, parallel subagents, and a token-efficient
+automation, persistent self-healing memory, a context-minimizing retrieval
+engine, parallel subagents with full observability, and a token-efficient
 operating prompt. Built for lean models where context window budget matters.
 
-Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
+**At a glance:** 21 agent tools, 14 slash commands, 4 autonomous subsystems
+(Context Virtual Memory, Quiet Output, Memory Health Engine, Delegation
+Harness) — zero runtime dependencies, Node built-ins + Pi's bundled
+packages only.
+
+## Install
+
+```bash
+# Local (from this directory)
+pi install /absolute/path/to/pi-tools
+
+# Or via git
+pi install git:github.com/chaudhary-adeel/pi-tools
+
+# Symlink into Pi's extension directory (editable install — no reinstall
+# needed after source changes, just restart pi or run /reload)
+npm run install:pi   # or: bash install.sh
+
+# Quick test without installing
+pi -e ./src/index.ts
+```
+
+No `npm install` needed to run it. For editor type-checking only:
+```bash
+npm install
+```
 
 ## What's inside
+
+Four autonomous subsystems do most of the heavy lifting — see their own
+sections below for how each works:
+
+| Subsystem | What it does |
+|---|---|
+| [Context Virtual Memory (CVM)](#context-virtual-memory-cvm) | Symbol-level retrieval, delta mode, HTTP caching — the smallest complete context, never whole files |
+| [Quiet Output](#quiet-output) | Compacts oversized tool output (including Pi's built-ins) before it reaches the model |
+| [Memory Health Engine](#memory-health-engine) | Autonomously scores, validates, dedupes, and heals `.pi/memory` against the live codebase |
+| [Delegation Harness](#delegation-harness) | Actively steers the model toward subagent fan-out instead of serial research |
 
 ### Agent Tools
 
@@ -27,9 +63,9 @@ Zero runtime dependencies — Node built-ins + Pi's bundled packages only.
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 | `memory_search` | Search across all memory files (system + learnings) for a query |
 
-**Browser (CDP):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps. SSRF-protected (blocks `file://`, private/reserved IPs). Verified end-to-end against headless Chromium.
+**Browser (CDP, 7 tools):** `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_evaluate`, `browser_console`, `browser_screenshot` — control a real Chromium-based browser via Chrome DevTools Protocol, zero deps. SSRF-protected (blocks `file://`, private/reserved IPs). Verified end-to-end against headless Chromium.
 
-For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
+For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash` — pi-tools overrides their rendering to a compact one-liner (full diff/content on Ctrl+O expand) rather than shipping duplicate tools.
 
 ### Slash Commands
 
@@ -41,20 +77,21 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash`.
 | `/consolidate` | Reorganize memory learnings — merge duplicates, archive stale entries, clean up |
 | `/init` | Initialize project memory from codebase analysis (framework, scripts, conventions) |
 | `/serve` | Start HTTP API server + bore tunnel for mobile/remote access |
-| `/config` | Configure git identity, greetings name, subagent model — interactive or `/config <key> <value>` |
+| `/config` | Configure git identity, greetings name, subagent model, and subsystem toggles — interactive or `/config <key> <value>` |
 | `/connectors` | List the connectors this package provides (tools, commands, requirements, active state) |
 | `/agents` | Show subagent setup: main/subagent model, nesting policy, presets (explorer, coder, reviewer, tester) |
 | `/newTask` | Run a task in a fresh subagent: `/newTask <prompt>` (standard) or `/newTask background <prompt>` (detached, logged to `.pi/newtask/`, tracked in tasks.json). Preset prefix: `/newTask reviewer: …` |
 | `/subagents` | Inspect subagent runs: `/subagents` lists recent runs, `/subagents <runId>` shows a run's summary, `/subagents <runId> <n>` shows one subagent's full prompt + complete activity trace + result |
 | `/harness` | Delegation-harness stats: research calls, subagent fan-outs, delegation ratio, nudges sent |
 | `/heal` | Memory Health Engine: score, validate, and heal `.pi/memory` now (`/heal dry` to preview) |
+| `/cvm` | Context Virtual Memory stats: tokens saved, cache hit ratios, symbol index size, storage backend (`/cvm index` forces a reindex) |
 | `/skill:browser` | Loads browser automation instructions into context |
 
 **Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
 
 ### Memory System
 
-Pi's brain, persisted across sessions in `.pi/memory/`:
+Pi's brain, persisted across sessions in `.pi/memory/` (generated at runtime — not shipped in this repo):
 
 - **System memory** (`.pi/memory/system/*.md`) — injected into context every turn. Project conventions, commands, persona, progress.
 - **Learnings** (`.pi/memory/learnings/*.md`) — on-demand. The agent sees descriptions and loads files with `read` when needed.
@@ -91,7 +128,7 @@ A layered context engine ([docs/CVM.md](docs/CVM.md)) that delivers the **smalle
 Compacts oversized tool output — including Pi's **built-in** tools (`read`, `bash`, `grep`, `find`, `ls`), not just this package's own — before it reaches the model. Complements the rest of the CVM, which is about not re-sending *unchanged* content; this handles the orthogonal case of a single output that's simply too big the first time (a huge `bash` stdout dump, a `grep` with thousands of hits, a full-file `read` with no limit):
 
 - **Deterministic, never AI summarization** — output over ~12,000 chars or 240 lines is replaced with a head+tail preview (100+60 lines normally, 160+120 for errors, since diagnostics matter more)
-- **Nothing is lost** — the full text is stashed in the CVM's content-addressed cold store (free dedup + brotli compression) and retrievable with the new `read_artifact` tool via the fingerprint shown in the preview
+- **Nothing is lost** — the full text is stashed in the CVM's content-addressed cold store (free dedup + brotli compression) and retrievable with the `read_artifact` tool via the fingerprint shown in the preview
 - **Only reshapes what the model sees, never the transcript** — this runs on the `context` event (fired before each LLM request), not on the tool result itself, so the terminal's scrollback and each tool's own rendered summary are completely unaffected; only the outbound API request is compacted
 - **`read` gets a default 120-line cap** when the model doesn't specify one, preventing accidental full-file dumps (skipped for images/binaries)
 - Compaction stats are memoized by content fingerprint, so a large historical output isn't re-processed on every subsequent turn — only the first time it's seen
@@ -121,7 +158,7 @@ Prompt rules alone don't make a model fan out — so pi-tools extends Pi's harne
 - **`/harness`** — live stats: research calls, fan-outs, delegation ratio, hints/nudges sent.
 - Disable with `/config autoDelegate off`. Subagent processes are excluded automatically (they can't spawn).
 
-**Subagent observability & non-blocking runs.** The live activity widget only ever shows each subagent's *latest* action and disappears after the run — previously that was the only visibility into what a subagent actually did, and it was lost the moment a new event overwrote it. Every run now persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` also accepts `background: true` — mirroring `/newTask`'s background mode but for a whole parallel batch — which starts the fan-out and returns immediately instead of blocking the calling turn, so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes.
+**Subagent observability & non-blocking runs.** The live activity widget only ever shows each subagent's *latest* action and disappears after the run. Every run now persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` also accepts `background: true` — mirroring `/newTask`'s background mode but for a whole parallel batch — which starts the fan-out and returns immediately instead of blocking the calling turn, so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes.
 
 ### Smart Prompting
 
@@ -136,24 +173,6 @@ Prompt rules alone don't make a model fan out — so pi-tools extends Pi's harne
 Two-line footer with repo+branch (`🌿 pi-tools:main`), context window progress bar (colored block chars), token I/O stats (↑/↓), cache hits, cost, subagent contribution, and model name. The bottom line shows the configured greetings name.
 
 Git commits through Pi are signed with the configured git identity (default `adeel.bot`) — change it with `/config`.
-
-## Install
-
-```bash
-# Local (from this directory)
-pi install /absolute/path/to/pi-tools
-
-# Or via git
-pi install git:github.com/chaudhary-adeel/pi-tools
-
-# Quick test without installing
-pi -e ./src/index.ts
-```
-
-No `npm install` needed. For editor type-checking only:
-```bash
-npm install
-```
 
 ## Config
 
@@ -188,8 +207,11 @@ Or manually: `google-chrome --remote-debugging-port=9222`
 ```
 pi-tools/
 ├── package.json
+├── install.sh                   # symlink installer (npm run install:pi / reinstall)
 ├── README.md
-├── skills/browser/              # browser automation skill
+├── docs/
+│   └── CVM.md                   # Context Virtual Memory spec + implementation status
+├── skills/browser/               # browser automation skill
 ├── tests/                       # test suite
 │   ├── memory.test.ts
 │   ├── memory-map.test.ts
@@ -215,7 +237,19 @@ pi-tools/
     │   ├── connectors-command.ts # /connectors — connector inventory
     │   ├── agents-command.ts    # /agents — subagent presets + model info
     │   ├── new-task-command.ts  # /newTask — standard/background subagent runs
-    │   └── subagents-command.ts # /subagents — inspect subagent run traces
+    │   ├── subagents-command.ts # /subagents — inspect subagent run traces
+    │   └── cvm-command.ts       # /cvm — CVM stats + manual reindex
+    ├── cvm/                      # Context Virtual Memory engine
+    │   ├── fingerprint.ts        #   SHA-256 content addressing + token estimates
+    │   ├── hot-cache.ts          #   in-process LRU+TTL cache
+    │   ├── warm-store.ts         #   persistent node:sqlite store
+    │   ├── cold-store.ts         #   brotli content-addressed object store
+    │   ├── symbols.ts            #   incremental symbol index
+    │   ├── context.ts            #   symbol-level context resolution + confidence
+    │   ├── delta.ts              #   session delta ledger (unchanged stubs / diffs)
+    │   ├── http-cache.ts         #   ETag/Last-Modified conditional fetch
+    │   ├── quiet-output.ts       #   oversized-output compaction + read() cap
+    │   └── metrics.ts            #   CVM-wide observability registry
     ├── lib/
     │   ├── harness.ts           # delegation heuristics + nudge state machine
     │   ├── harness-register.ts  # harness event wiring + /harness command
