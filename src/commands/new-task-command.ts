@@ -13,6 +13,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { applyPreset } from "../lib/agents.ts";
 import { getSubagentModel } from "../lib/config.ts";
 import { getPiCommand } from "../lib/shared.ts";
@@ -73,6 +74,24 @@ export function registerNewTaskCommand(pi: ExtensionAPI): void {
         ctx.ui.setStatus("newtask", undefined);
       }
     },
+  });
+
+  // Without a registered renderer, Pi's default custom-message component
+  // dumps the full markdown body unconditionally — no collapsed state at
+  // all. Match spawn_subagents' collapsed-by-default / expand convention.
+  pi.registerMessageRenderer("pi-tools:newtask-result", (message, { expanded }, theme) => {
+    const details = message.details as { id?: string; exitCode?: number } | undefined;
+    const contentText =
+      typeof message.content === "string"
+        ? message.content
+        : message.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+
+    const ok = details?.exitCode === 0;
+    const icon = ok ? theme.fg("success", "✓") : theme.fg("warning", `✗ (exit ${details?.exitCode})`);
+    let summary = theme.fg("accent", "newTask ") + icon;
+    if (details?.id) summary += theme.fg("dim", `  [${details.id}]`);
+    if (expanded) summary += "\n" + contentText;
+    return new Text(summary, 0, 0);
   });
 }
 

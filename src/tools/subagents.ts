@@ -366,6 +366,66 @@ function formatResultsBody(results: SubResult[]): string {
     .join("\n\n---\n\n");
 }
 
+// ── live widget (shared by blocking and background paths) ──────────────────
+//
+// Keyed per-run (`subagents:<runId>`) rather than a single shared key, so a
+// background batch and a fresh blocking call — or two background batches —
+// never clobber each other's widget.
+
+interface WidgetTracker {
+  latestActivity: Map<number, string>;
+  doneCount: number;
+}
+
+function widgetKey(runId: string): string {
+  return `subagents:${runId}`;
+}
+
+function createWidgetTracker(tasks: SubTask[]): WidgetTracker {
+  const latestActivity = new Map<number, string>();
+  for (let i = 0; i < tasks.length; i++) {
+    const preview = tasks[i]!.prompt.length > 100 ? tasks[i]!.prompt.slice(0, 97) + "…" : tasks[i]!.prompt;
+    latestActivity.set(i, `prompt: ${preview}`);
+  }
+  return { latestActivity, doneCount: 0 };
+}
+
+function renderSubagentWidget(
+  ctx: ExtensionContext,
+  runId: string,
+  total: number,
+  background: boolean,
+  tracker: WidgetTracker,
+): void {
+  if (tracker.latestActivity.size === 0) return;
+  const sorted = [...tracker.latestActivity.entries()].sort(([a], [b]) => a - b);
+  const termWidth = process.stdout.columns ?? 80;
+  const tag = background ? "bg " : "";
+  const prefix = `⟳ ${tag}${tracker.doneCount}/${total} | `;
+  const key = widgetKey(runId);
+  if (termWidth < prefix.length + 10) {
+    ctx.ui.setWidget(key, [`⟳ ${tag}${tracker.doneCount}/${total}`]);
+    return;
+  }
+  let line = prefix;
+  let remaining = termWidth - prefix.length;
+  let first = true;
+  for (const [idx, desc] of sorted) {
+    const entry = `#${idx + 1} ${desc}`;
+    const sep = first ? "" : " | ";
+    if (remaining >= sep.length + 4) {
+      const max = remaining - sep.length;
+      const shown = entry.length <= max ? entry : entry.slice(0, max - 1) + "…";
+      line += sep + shown;
+      remaining -= sep.length + shown.length;
+      first = false;
+    } else {
+      break;
+    }
+  }
+  ctx.ui.setWidget(key, [line]);
+}
+
 // ── register ───────────────────────────────────────────────────────────────
 
 export function registerSubagentTool(pi: ExtensionAPI): void {
@@ -491,60 +551,28 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       // ── blocking (default): show live status, wait for everything ──
       const modelNote = model ? ` (model: ${model})` : "";
       ctx.ui.notify(`🚀 Spawning ${total} ${label}${modelNote}…`, "info");
-      ctx.ui.setStatus("subagents", `${total} ${label} running…`);
+      ctx.ui.setStatus(runId, `${total} ${label} running…`);
 
       // Live activity widget — compact single-line indicator of subagent
       // progress. The FULL history lives in the trace files above; this is
       // just an at-a-glance widget showing each subagent's latest activity.
-      const latestActivity = new Map<number, string>();
-      for (let i = 0; i < tasks.length; i++) {
-        const preview = tasks[i]!.prompt.length > 100 ? tasks[i]!.prompt.slice(0, 97) + "…" : tasks[i]!.prompt;
-        latestActivity.set(i, `prompt: ${preview}`);
-      }
-      let doneCount = 0;
-      const renderWidget = () => {
-        if (latestActivity.size === 0) return;
-        const sorted = [...latestActivity.entries()].sort(([a], [b]) => a - b);
-        const termWidth = process.stdout.columns ?? 80;
-        const prefix = `⟳ ${doneCount}/${total} | `;
-        if (termWidth < prefix.length + 10) {
-          ctx.ui.setWidget("subagents", [`⟳ ${doneCount}/${total}`]);
-          return;
-        }
-        let line = prefix;
-        let remaining = termWidth - prefix.length;
-        let first = true;
-        for (const [idx, desc] of sorted) {
-          const entry = `#${idx + 1} ${desc}`;
-          const sep = first ? "" : " | ";
-          if (remaining >= sep.length + 4) {
-            const max = remaining - sep.length;
-            const shown = entry.length <= max ? entry : entry.slice(0, max - 1) + "…";
-            line += sep + shown;
-            remaining -= sep.length + shown.length;
-            first = false;
-          } else {
-            break;
-          }
-        }
-        ctx.ui.setWidget("subagents", [line]);
-      };
-      renderWidget();
+      const tracker = createWidgetTracker(tasks);
+      renderSubagentWidget(ctx, runId, total, false, tracker);
 
       try {
         const results = await runAll(tasks, ids, {
           concurrency, cwd: ctx.cwd, model, signal,
           onProgress: (done) => {
-            doneCount = done;
+            tracker.doneCount = done;
             const icon = done < total ? "⟳" : "✓";
-            ctx.ui.setStatus("subagents", `${icon} ${done}/${total} ${label} finished`);
-            renderWidget();
+            ctx.ui.setStatus(runId, `${icon} ${done}/${total} ${label} finished`);
+            renderSubagentWidget(ctx, runId, total, false, tracker);
             onUpdate?.({ content: [{ type: "text", text: `Subagents finished: ${done}/${total}` }], details: undefined });
           },
           onActivity: (activity) => {
-            latestActivity.set(activity.index, activity.description);
+            tracker.latestActivity.set(activity.index, activity.description);
             onActivity(activity);
-            renderWidget();
+            renderSubagentWidget(ctx, runId, total, false, tracker);
           },
           onSubagentDone: (result) => {
             onSubagentDone(result);
@@ -557,7 +585,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         });
 
         results.sort((a, b) => a.index - b.index);
-        setTimeout(() => ctx.ui.setWidget("subagents", undefined), 2000);
+        setTimeout(() => ctx.ui.setWidget(widgetKey(runId), undefined), 2000);
 
         writeManifest(ctx.cwd, {
           runId, startedAt, finishedAt: Date.now(), background: false,
@@ -567,7 +595,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         const resultBody = truncate(formatResultsBody(results), 40_000);
         const traceNote = `\n\nFull activity trace for each subagent: ${traceDir}/ (or /subagents ${runId})`;
 
-        ctx.ui.setStatus("subagents", undefined);
+        ctx.ui.setStatus(runId, undefined);
         const icon = results.every((r) => r.exitCode === 0) ? "✓" : "⚠";
         const idList = results.map((r) => r.id).join(", ");
         ctx.ui.notify(`${icon} ${results.length}/${total} ${label} completed (${idList})`, "info");
@@ -622,8 +650,8 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           runId,
         });
       } catch (_err) {
-        ctx.ui.setStatus("subagents", undefined);
-        ctx.ui.setWidget("subagents", undefined);
+        ctx.ui.setStatus(runId, undefined);
+        ctx.ui.setWidget(widgetKey(runId), undefined);
         throw _err;
       }
     },
@@ -645,13 +673,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       }
       return new Text(t, 0, 0);
     },
-    renderResult(result, _options, theme, context) {
+    renderResult(result, { expanded }, theme, context) {
       if (context.isError) {
         return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const d = result.details as Record<string, unknown> | undefined;
       if (d?.background) {
-        return new Text(theme.fg("accent", `🚀 ${d.count ?? "?"} subagent(s) started in background`), 0, 0);
+        let summary = theme.fg("accent", `🚀 ${d.count ?? "?"} subagent(s) started in background`);
+        if (d.runId) summary += theme.fg("dim", `  [${d.runId}]`);
+        if (expanded) summary += "\n" + theme.fg("dim", firstText(result));
+        return new Text(summary, 0, 0);
       }
       const count = (d?.count as number) ?? 0;
       const ok = (d?.successCount as number) ?? count;
@@ -659,8 +690,32 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const icon = ok === count ? theme.fg("success", "✓") : theme.fg("warning", "◐");
       let summary = icon + " " + theme.fg("muted", `${ok}/${count} subagent(s) finished`);
       if (ids.length > 0) summary += "  " + theme.fg("dim", ids.join(" "));
+      if (expanded) summary += "\n" + firstText(result);
       return new Text(summary, 0, 0);
     },
+  });
+
+  // Background-run completion message. Without a registered renderer, Pi's
+  // default custom-message component dumps the full markdown body
+  // unconditionally — there is no collapsed state at all. Match the tool's
+  // own collapsed-by-default / ctrl+o-to-expand convention instead.
+  pi.registerMessageRenderer("pi-tools:subagents-background-result", (message, { expanded }, theme) => {
+    const details = message.details as
+      | { runId?: string; ids?: string[]; count?: number; successCount?: number }
+      | undefined;
+    const contentText =
+      typeof message.content === "string"
+        ? message.content
+        : message.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+
+    const count = details?.count ?? 0;
+    const ok = details?.successCount ?? count;
+    const icon = ok === count ? theme.fg("success", "✓") : theme.fg("warning", "⚠");
+    let summary = theme.fg("accent", "🚀 background subagents ") + icon + " " + theme.fg("muted", `${ok}/${count} finished`);
+    if (details?.runId) summary += theme.fg("dim", `  [${details.runId}]`);
+    if (details?.ids && details.ids.length > 0) summary += "  " + theme.fg("dim", details.ids.join(" "));
+    if (expanded) summary += "\n" + contentText;
+    return new Text(summary, 0, 0);
   });
 }
 
@@ -699,14 +754,29 @@ function runInBackground(
     updateTask(ctx.cwd, te.id, { status: "in_progress", notes: `trace: ${traceDir}/subagent-${i + 1}.json` }),
   );
 
+  // Live widget — background mode previously had NO visual indicator at all
+  // once started; the batch just vanished into the process with nothing on
+  // screen until the completion message. Same widget the blocking path uses,
+  // tagged "bg" and keyed per-run so it doesn't collide with other runs.
+  const tracker = createWidgetTracker(tasks);
+  ctx.ui.setStatus(runId, `${total} ${label} running in background…`);
+  renderSubagentWidget(ctx, runId, total, true, tracker);
+
   void (async () => {
     let results: SubResult[] = [];
     try {
       results = await runAll(tasks, ids, {
         concurrency, cwd: ctx.cwd, model,
-        onActivity,
+        onActivity: (activity) => {
+          tracker.latestActivity.set(activity.index, activity.description);
+          onActivity(activity);
+          renderSubagentWidget(ctx, runId, total, true, tracker);
+        },
         onSubagentDone: (result) => {
           onSubagentDone(result);
+          tracker.doneCount++;
+          ctx.ui.setStatus(runId, `⟳ bg ${tracker.doneCount}/${total} ${label} finished`);
+          renderSubagentWidget(ctx, runId, total, true, tracker);
           const task = taskEntries[result.index];
           if (task) {
             updateTask(ctx.cwd, task.id, {
@@ -728,16 +798,27 @@ function runInBackground(
 
       const icon = results.every((r) => r.exitCode === 0) ? "✓" : "⚠";
       const idList = results.map((r) => r.id).join(", ");
+      ctx.ui.setStatus(runId, undefined);
+      setTimeout(() => ctx.ui.setWidget(widgetKey(runId), undefined), 2000);
       pi.sendMessage(
         {
           customType: "pi-tools:subagents-background-result",
           content: `## Background subagents ${icon} [${runId}]\n\n${truncate(formatResultsBody(results), 40_000)}\n\nFull traces: ${traceDir}/`,
           display: true,
-          details: { runId, ids: results.map((r) => r.id), usage: agg },
+          details: {
+            runId,
+            ids: results.map((r) => r.id),
+            usage: agg,
+            count: results.length,
+            successCount: results.filter((r) => r.exitCode === 0).length,
+            traceDir,
+          },
         },
       );
       ctx.ui.notify(`${icon} background subagents completed (${idList})`, results.every((r) => r.exitCode === 0) ? "info" : "error");
     } catch (err) {
+      ctx.ui.setStatus(runId, undefined);
+      ctx.ui.setWidget(widgetKey(runId), undefined);
       for (const te of taskEntries) updateTask(ctx.cwd, te.id, { status: "pending", notes: `batch failed: ${(err as Error).message}` });
       ctx.ui.notify(`✗ background subagents [${runId}] failed: ${(err as Error).message}`, "error");
     }
