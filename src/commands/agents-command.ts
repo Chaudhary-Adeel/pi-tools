@@ -19,7 +19,7 @@ export function registerAgentsCommand(pi: ExtensionAPI): void {
         "Presets (use as '/newTask <preset>: <task>' or in spawn_subagents prompts):",
         ...AGENT_PRESETS.map((p) => `  ${p.name.padEnd(9)} ${p.description}`),
         "",
-        "Commands: /newTask <prompt> · /newTask background <prompt>",
+        "Commands: /newTask <prompt> · /newTask background <prompt> · /subagents [runId] [n]",
       ];
       ctx.ui.notify(lines.join("\n"), "info");
     },

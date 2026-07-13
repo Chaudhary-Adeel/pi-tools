@@ -14,6 +14,22 @@
 // subagentModel, or PI_SUBAGENT_MODEL), and they can never spawn subagents
 // themselves: the child process is marked with PI_TOOLS_SUBAGENT=1 and this
 // module skips registering spawn_subagents inside marked processes.
+//
+// Observability & non-blocking mode:
+//   Every run writes a full, untruncated trace per subagent (prompt, every
+//   tool-call activity event, final result) to .pi/subagents/<runId>/ via
+//   lib/subagent-trace.ts — the live widget only ever showed the LATEST
+//   activity line and vanished after the run, so that was previously the
+//   ONLY visibility into what a subagent actually did. Inspect any run with
+//   the /subagents command.
+//
+//   background: true starts the batch and returns immediately (mirroring
+//   /newTask's background mode) instead of blocking the calling turn until
+//   every subagent finishes — tracked via the `tasks` tool, with a
+//   completion notification when the whole batch is done. Unlike /newTask's
+//   detached spawn (meant to survive session exit), this stays attached to
+//   the current process: the point is to let the main agent keep working
+//   *within this session* while subagents run, not to outlive it.
 
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
@@ -22,11 +38,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, firstText, truncate, getPiCommand } from "../lib/shared.ts";
 import { getSubagentModel } from "../lib/config.ts";
 import { addSubagentUsage, type SubagentUsage } from "../lib/subagent-tokens.ts";
+import { addTasks, updateTask } from "../lib/tasks.ts";
+import {
+  appendEvent,
+  makeRunId,
+  runDir,
+  writeManifest,
+  writeSubagentTrace,
+  type SubagentTrace,
+} from "../lib/subagent-trace.ts";
 
 /** Set in subagent subprocess environments; blocks nested spawning. */
 export const SUBAGENT_ENV_FLAG = "PI_TOOLS_SUBAGENT";
@@ -97,37 +122,27 @@ function shortCmd(cmd: string): string {
   return firstLine.length > 50 ? firstLine.slice(0, 47) + "…" : firstLine;
 }
 
-// ── core: run one subagent ─────────────────────────────────────────────────
-
-function makeSubagentId(index: number): string {
+export function makeSubagentId(index: number): string {
   return `sub-${index + 1}-${crypto.randomBytes(2).toString("hex")}`;
 }
 
-/** Run a single subagent task and await its result. Used by the
- *  spawn_subagents tool and by /newTask. */
-export function runSubagent(
-  cwd: string,
-  prompt: string,
-  model?: string,
-  signal?: AbortSignal,
-  onActivity?: (activity: SubActivity) => void,
-): Promise<SubagentRunResult> {
-  return runOne(cwd, { prompt }, 0, model, signal, onActivity);
+// ── core: run one subagent ─────────────────────────────────────────────────
+
+interface RunOneOptions {
+  cwd: string;
+  task: SubTask;
+  index: number;
+  id: string;
+  model?: string;
+  signal?: AbortSignal;
+  onActivity?: (activity: SubActivity) => void;
 }
 
-export type SubagentRunResult = SubResult;
-
-function runOne(
-  cwd: string,
-  task: SubTask,
-  index: number,
-  model?: string,
-  signal?: AbortSignal,
-  onActivity?: (activity: SubActivity) => void,
-): Promise<SubResult> {
+function runOne(options: RunOneOptions): Promise<SubResult> {
+  const { cwd, task, index, id, model, signal, onActivity } = options;
   return new Promise((resolve) => {
     const result: SubResult = {
-      id: makeSubagentId(index),
+      id,
       index,
       prompt: task.prompt,
       output: "",
@@ -243,17 +258,36 @@ function runOne(
   });
 }
 
-// ── concurrency limiter ────────────────────────────────────────────────────
-
-async function runAll(
-  tasks: SubTask[],
-  concurrency: number,
+/** Run a single subagent task and await its result. Used by /newTask. */
+export function runSubagent(
   cwd: string,
+  prompt: string,
   model?: string,
   signal?: AbortSignal,
-  onProgress?: (done: number) => void,
   onActivity?: (activity: SubActivity) => void,
-): Promise<SubResult[]> {
+): Promise<SubagentRunResult> {
+  return runOne({ cwd, task: { prompt }, index: 0, id: makeSubagentId(0), model, signal, onActivity });
+}
+
+export type SubagentRunResult = SubResult;
+
+// ── concurrency limiter ────────────────────────────────────────────────────
+
+interface RunAllOptions {
+  concurrency: number;
+  cwd: string;
+  model?: string;
+  signal?: AbortSignal;
+  onProgress?: (done: number) => void;
+  onActivity?: (activity: SubActivity) => void;
+  /** Fired the instant each subagent resolves, before onProgress — used to
+   *  finalize that subagent's trace file immediately rather than waiting
+   *  for the whole batch. */
+  onSubagentDone?: (result: SubResult) => void;
+}
+
+async function runAll(tasks: SubTask[], ids: string[], options: RunAllOptions): Promise<SubResult[]> {
+  const { concurrency, cwd, model, signal, onProgress, onActivity, onSubagentDone } = options;
   if (tasks.length === 0) return [];
   const limit = Math.max(1, Math.min(concurrency, tasks.length));
   const results: SubResult[] = new Array(tasks.length);
@@ -265,7 +299,11 @@ async function runAll(
       if (signal?.aborted) return;
       const current = nextIndex++;
       if (current >= tasks.length) return;
-      results[current] = await runOne(cwd, tasks[current], current, model, signal, onActivity);
+      const result = await runOne({
+        cwd, task: tasks[current]!, index: current, id: ids[current]!, model, signal, onActivity,
+      });
+      results[current] = result;
+      onSubagentDone?.(result);
       done++;
       onProgress?.(done);
     }
@@ -273,6 +311,59 @@ async function runAll(
 
   await Promise.all(workers);
   return results.filter(Boolean);
+}
+
+// ── tracing helpers ──────────────────────────────────────────────────────────
+
+/** Seed one trace file per task before any subagent starts, so /subagents
+ *  shows a "queued" state immediately rather than only after first activity. */
+function initTraces(
+  cwd: string,
+  runId: string,
+  tasks: SubTask[],
+  ids: string[],
+  model: string | undefined,
+): Map<number, SubagentTrace> {
+  const traces = new Map<number, SubagentTrace>();
+  const now = Date.now();
+  for (let i = 0; i < tasks.length; i++) {
+    const trace: SubagentTrace = {
+      id: ids[i]!,
+      index: i,
+      prompt: tasks[i]!.prompt,
+      context: tasks[i]!.context,
+      model,
+      startedAt: now,
+      events: [],
+    };
+    traces.set(i, trace);
+    writeSubagentTrace(cwd, runId, trace);
+  }
+  return traces;
+}
+
+function aggregateUsage(results: SubResult[]): SubagentUsage {
+  const agg: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+  for (const r of results) {
+    agg.input += r.usage.input;
+    agg.output += r.usage.output;
+    agg.cacheRead += r.usage.cacheRead;
+    agg.cacheWrite += r.usage.cacheWrite;
+    agg.cost += r.usage.cost;
+    agg.turns += r.usage.turns;
+  }
+  return agg;
+}
+
+function formatResultsBody(results: SubResult[]): string {
+  return results
+    .map((r) => {
+      const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
+      const header = `### Subagent ${r.index + 1} [${r.id}]  ${status}\nTask: ${r.prompt}`;
+      const out = r.output || r.stderr || "(no output)";
+      return `${header}\n\nResult:\n${out}`;
+    })
+    .join("\n\n---\n\n");
 }
 
 // ── register ───────────────────────────────────────────────────────────────
@@ -290,14 +381,20 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "and return each subagent's final answer. Each subagent has its own " +
       "fresh context window, so use this to fan out work (research several " +
       "files/topics at once, draft independent pieces) and keep the main " +
-      "context lean. Only the conclusions come back — not the intermediate " +
-      "steps. Each completed subagent is reported with a stable id (e.g. " +
-      "sub-2-4fd1) you can reference later. Subagents may run on a lighter " +
-      "model (configured via /config) and cannot spawn subagents themselves.",
+      "context lean. Only the conclusions come back inline — not the " +
+      "intermediate steps — but every tool call each subagent makes is " +
+      "recorded to a full trace you can inspect with /subagents or by " +
+      "reading its file directly. Each completed subagent is reported with " +
+      "a stable id (e.g. sub-2-4fd1). Subagents may run on a lighter model " +
+      "(configured via /config) and cannot spawn subagents themselves. Set " +
+      "background: true to start the batch and keep working yourself " +
+      "instead of blocking this turn until every subagent finishes.",
     promptSnippet: "delegate independent subtasks to parallel subagents",
     promptGuidelines: [
       "Give each subagent a self-contained prompt: it cannot see this conversation, so include every fact, path, and constraint it needs.",
       "When subagent results would be large (extensive code, long reports), set output_to_files: true to write results to temp files instead of bloating the main context window. Read files with Pi's built-in read tool when you need the full output.",
+      "For a substantial fan-out (3+ subagents, or work likely to take a while), set background: true and keep making progress yourself — implement the parts that don't depend on the subagents' findings, or continue other work — instead of sitting idle on a blocking call. You'll be notified when the batch completes.",
+      "If you need to see exactly what a subagent did (not just its final answer), use /subagents <runId> or read the trace file mentioned in the result.",
     ],
     parameters: Type.Object({
       tasks: Type.Array(
@@ -331,6 +428,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             "tool when you need the full results. Default: false (inline results).",
         }),
       ),
+      background: Type.Optional(
+        Type.Boolean({
+          description:
+            "If true, start the batch and return immediately instead of " +
+            "blocking until every subagent finishes — you can keep working " +
+            "in the meantime. Tracked via the tasks tool; you'll get a " +
+            "notification (and a message in this conversation) when the " +
+            "whole batch completes. Default: false (wait for all results).",
+        }),
+      ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const tasks: SubTask[] = (params.tasks as SubTask[]) ?? [];
@@ -340,34 +447,70 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const total = tasks.length;
       const label = total === 1 ? "subagent" : "subagents";
       const model = getSubagentModel(ctx.cwd);
+      const ids = tasks.map((_, i) => makeSubagentId(i));
+      const runId = makeRunId();
+      const startedAt = Date.now();
+      const traceDir = runDir(ctx.cwd, runId);
+      const batchLabel = tasks[0]!.prompt.split("\n")[0]!.slice(0, 60) + (total > 1 ? ` (+${total - 1} more)` : "");
 
-      // Show visible notification in the chat + status bar
+      writeManifest(ctx.cwd, {
+        runId, startedAt, background: !!params.background,
+        total, completed: 0, label: batchLabel,
+      });
+      const traces = initTraces(ctx.cwd, runId, tasks, ids, model);
+
+      const onActivity = (activity: SubActivity) => {
+        const trace = traces.get(activity.index);
+        if (!trace) return;
+        const updated = appendEvent(trace, { toolName: activity.toolName, description: activity.description });
+        traces.set(activity.index, updated);
+        writeSubagentTrace(ctx.cwd, runId, updated);
+      };
+
+      const onSubagentDone = (result: SubResult) => {
+        const trace = traces.get(result.index);
+        if (!trace) return;
+        const finished: SubagentTrace = {
+          ...trace,
+          finishedAt: Date.now(),
+          exitCode: result.exitCode,
+          result: result.output || result.stderr || "(no output)",
+        };
+        traces.set(result.index, finished);
+        writeSubagentTrace(ctx.cwd, runId, finished);
+      };
+
+      // ── background: acknowledge now, run + report later ──
+      if (params.background) {
+        return runInBackground(pi, ctx, {
+          tasks, ids, runId, startedAt, traceDir, batchLabel, concurrency, model, total, label,
+          onActivity, onSubagentDone,
+        });
+      }
+
+      // ── blocking (default): show live status, wait for everything ──
       const modelNote = model ? ` (model: ${model})` : "";
       ctx.ui.notify(`🚀 Spawning ${total} ${label}${modelNote}…`, "info");
       ctx.ui.setStatus("subagents", `${total} ${label} running…`);
 
-      // Live activity widget — compact single-line indicator of subagent progress.
-      // Detailed results are in the chat output; this is just an at-a-glance widget.
-      const activityLog = new Map<number, string>();
-      // Seed with prompt summaries so the user can inspect them at a glance
+      // Live activity widget — compact single-line indicator of subagent
+      // progress. The FULL history lives in the trace files above; this is
+      // just an at-a-glance widget showing each subagent's latest activity.
+      const latestActivity = new Map<number, string>();
       for (let i = 0; i < tasks.length; i++) {
-        const preview = tasks[i].prompt.length > 100
-          ? tasks[i].prompt.slice(0, 97) + "…"
-          : tasks[i].prompt;
-        activityLog.set(i, `prompt: ${preview}`);
+        const preview = tasks[i]!.prompt.length > 100 ? tasks[i]!.prompt.slice(0, 97) + "…" : tasks[i]!.prompt;
+        latestActivity.set(i, `prompt: ${preview}`);
       }
       let doneCount = 0;
       const renderWidget = () => {
-        if (activityLog.size === 0) return;
-        const sorted = [...activityLog.entries()].sort(([a], [b]) => a - b);
+        if (latestActivity.size === 0) return;
+        const sorted = [...latestActivity.entries()].sort(([a], [b]) => a - b);
         const termWidth = process.stdout.columns ?? 80;
         const prefix = `⟳ ${doneCount}/${total} | `;
-        // Very narrow terminal — just the count
         if (termWidth < prefix.length + 10) {
           ctx.ui.setWidget("subagents", [`⟳ ${doneCount}/${total}`]);
           return;
         }
-        // Compact single line: ⟳ done/total | #1 desc | #2 desc …
         let line = prefix;
         let remaining = termWidth - prefix.length;
         let first = true;
@@ -386,72 +529,54 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         }
         ctx.ui.setWidget("subagents", [line]);
       };
-      renderWidget(); // show prompts immediately
+      renderWidget();
 
       try {
-        const results = await runAll(
-          tasks,
-          concurrency,
-          ctx.cwd,
-          model,
-          signal,
-          (done) => {
+        const results = await runAll(tasks, ids, {
+          concurrency, cwd: ctx.cwd, model, signal,
+          onProgress: (done) => {
             doneCount = done;
             const icon = done < total ? "⟳" : "✓";
             ctx.ui.setStatus("subagents", `${icon} ${done}/${total} ${label} finished`);
             renderWidget();
-            onUpdate?.({
-              content: [{ type: "text", text: `Subagents finished: ${done}/${total}` }],
-              details: undefined,
-            });
+            onUpdate?.({ content: [{ type: "text", text: `Subagents finished: ${done}/${total}` }], details: undefined });
           },
-          (activity) => {
-            activityLog.set(activity.index, activity.description);
+          onActivity: (activity) => {
+            latestActivity.set(activity.index, activity.description);
+            onActivity(activity);
             renderWidget();
           },
-        );
+          onSubagentDone: (result) => {
+            onSubagentDone(result);
+            writeManifest(ctx.cwd, {
+              runId, startedAt, background: false,
+              total, completed: [...traces.values()].filter((t) => t.exitCode !== undefined).length,
+              label: batchLabel,
+            });
+          },
+        });
 
-        // Sort by original index
         results.sort((a, b) => a.index - b.index);
-
-        // Keep the final widget state visible for 2s, then clear
         setTimeout(() => ctx.ui.setWidget("subagents", undefined), 2000);
 
-        const body = results
-          .map((r) => {
-            const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
-            const header = `### Subagent ${r.index + 1} [${r.id}]  ${status}\nTask: ${r.prompt}`;
-            const out = r.output || r.stderr || "(no output)";
-            return `${header}\n\nResult:\n${out}`;
-          })
-          .join("\n\n---\n\n");
+        writeManifest(ctx.cwd, {
+          runId, startedAt, finishedAt: Date.now(), background: false,
+          total, completed: results.length, label: batchLabel,
+        });
 
-        const resultBody = truncate(body, 40_000);
+        const resultBody = truncate(formatResultsBody(results), 40_000);
+        const traceNote = `\n\nFull activity trace for each subagent: ${traceDir}/ (or /subagents ${runId})`;
 
-        // Clear status bar, show completion notification with completed ids
         ctx.ui.setStatus("subagents", undefined);
         const icon = results.every((r) => r.exitCode === 0) ? "✓" : "⚠";
         const idList = results.map((r) => r.id).join(", ");
         ctx.ui.notify(`${icon} ${results.length}/${total} ${label} completed (${idList})`, "info");
 
-        // ── Accumulate subagent LLM usage into the tracker so the ──
-        // ── main footer can show the combined total.               ──
-        const agg: SubagentUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-        for (const r of results) {
-          agg.input += r.usage.input;
-          agg.output += r.usage.output;
-          agg.cacheRead += r.usage.cacheRead;
-          agg.cacheWrite += r.usage.cacheWrite;
-          agg.cost += r.usage.cost;
-          agg.turns += r.usage.turns;
-        }
+        const agg = aggregateUsage(results);
         addSubagentUsage(agg);
 
-        // ── File-output mode: persist results to disk, return references ──
         if (params.output_to_files) {
-          const tmpDir = await fs.promises.mkdtemp(
-            path.join(os.tmpdir(), "pi-subagent-"),
-          );
+          const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
           const filePaths: string[] = [];
           for (const r of results) {
             const fname = `subagent-${r.index + 1}-result.md`;
@@ -461,9 +586,6 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             await fs.promises.writeFile(fp, content, "utf-8");
             filePaths.push(fp);
           }
-
-          // Return compact references — NOT the full text. This keeps the
-          // context window lean.
           const refSummary = results
             .map((r, i) => {
               const status = r.exitCode === 0 ? "✓" : `✗`;
@@ -473,7 +595,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
             .join("\n\n");
 
           return text(
-            `Subagent results written to ${tmpDir}/\n\n${refSummary}\n\nUse Pi's \`read\` tool to load full results.`,
+            `Subagent results written to ${tmpDir}/\n\n${refSummary}${traceNote}\n\nUse Pi's \`read\` tool to load full results.`,
             {
               count: results.length,
               successCount: results.filter((r) => r.exitCode === 0).length,
@@ -484,12 +606,12 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
               subagentUsage: agg,
               outputDir: tmpDir,
               outputFiles: filePaths,
+              runId,
             },
           );
         }
 
-        // ── Inline mode (default) ──
-        return text(resultBody, {
+        return text(resultBody + traceNote, {
           count: results.length,
           successCount: results.filter((r) => r.exitCode === 0).length,
           ids: results.map((r) => r.id),
@@ -497,6 +619,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
           models: results.map((r) => r.model).filter(Boolean),
           totalTurns: results.reduce((s, r) => s + r.turns, 0),
           subagentUsage: agg,
+          runId,
         });
       } catch (_err) {
         ctx.ui.setStatus("subagents", undefined);
@@ -509,6 +632,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const n = tasks?.length ?? 0;
       let t = theme.fg("toolTitle", theme.bold("subagents "));
       t += theme.fg("muted", `(${n})`);
+      if (args.background) t += theme.fg("accent", " [background]");
       if (tasks && tasks.length > 0) {
         t += "\n";
         t += tasks
@@ -526,6 +650,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         return new Text(theme.fg("error", firstText(result, "Error")), 0, 0);
       }
       const d = result.details as Record<string, unknown> | undefined;
+      if (d?.background) {
+        return new Text(theme.fg("accent", `🚀 ${d.count ?? "?"} subagent(s) started in background`), 0, 0);
+      }
       const count = (d?.count as number) ?? 0;
       const ok = (d?.successCount as number) ?? count;
       const ids = (d?.ids as string[] | undefined) ?? [];
@@ -535,4 +662,91 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       return new Text(summary, 0, 0);
     },
   });
+}
+
+// ── background mode ──────────────────────────────────────────────────────────
+
+interface BackgroundOptions {
+  tasks: SubTask[];
+  ids: string[];
+  runId: string;
+  startedAt: number;
+  traceDir: string;
+  batchLabel: string;
+  concurrency: number;
+  model?: string;
+  total: number;
+  label: string;
+  onActivity: (activity: SubActivity) => void;
+  onSubagentDone: (result: SubResult) => void;
+}
+
+/** Starts the batch without awaiting it, returning an immediate ack result.
+ *  Deliberately NOT tied to the calling turn's abort signal or detached from
+ *  this process (see module header) — it runs for the life of this session. */
+function runInBackground(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  opts: BackgroundOptions,
+): ReturnType<typeof text> {
+  const { tasks, ids, runId, startedAt, traceDir, batchLabel, concurrency, model, total, label, onActivity, onSubagentDone } = opts;
+
+  const taskEntries = addTasks(
+    ctx.cwd,
+    tasks.map((t, i) => `subagent[${runId}#${i + 1}]: ${t.prompt.split("\n")[0]!.slice(0, 60)}`),
+  );
+  taskEntries.forEach((te, i) =>
+    updateTask(ctx.cwd, te.id, { status: "in_progress", notes: `trace: ${traceDir}/subagent-${i + 1}.json` }),
+  );
+
+  void (async () => {
+    let results: SubResult[] = [];
+    try {
+      results = await runAll(tasks, ids, {
+        concurrency, cwd: ctx.cwd, model,
+        onActivity,
+        onSubagentDone: (result) => {
+          onSubagentDone(result);
+          const task = taskEntries[result.index];
+          if (task) {
+            updateTask(ctx.cwd, task.id, {
+              status: result.exitCode === 0 ? "completed" : "pending",
+              notes: result.exitCode === 0 ? `[${result.id}] done` : `[${result.id}] failed (exit ${result.exitCode})`,
+            });
+          }
+        },
+      });
+      results.sort((a, b) => a.index - b.index);
+
+      writeManifest(ctx.cwd, {
+        runId, startedAt, finishedAt: Date.now(), background: true,
+        total, completed: results.length, label: batchLabel,
+      });
+
+      const agg = aggregateUsage(results);
+      addSubagentUsage(agg);
+
+      const icon = results.every((r) => r.exitCode === 0) ? "✓" : "⚠";
+      const idList = results.map((r) => r.id).join(", ");
+      pi.sendMessage(
+        {
+          customType: "pi-tools:subagents-background-result",
+          content: `## Background subagents ${icon} [${runId}]\n\n${truncate(formatResultsBody(results), 40_000)}\n\nFull traces: ${traceDir}/`,
+          display: true,
+          details: { runId, ids: results.map((r) => r.id), usage: agg },
+        },
+      );
+      ctx.ui.notify(`${icon} background subagents completed (${idList})`, results.every((r) => r.exitCode === 0) ? "info" : "error");
+    } catch (err) {
+      for (const te of taskEntries) updateTask(ctx.cwd, te.id, { status: "pending", notes: `batch failed: ${(err as Error).message}` });
+      ctx.ui.notify(`✗ background subagents [${runId}] failed: ${(err as Error).message}`, "error");
+    }
+  })();
+
+  return text(
+    `🚀 Started ${total} ${label} in background (run ${runId}). Continue your own work — ` +
+      `you'll get a message here when the batch completes. Track progress with the tasks tool, ` +
+      `/subagents ${runId}, or by reading ${traceDir}/.`,
+    { background: true, runId, count: total, taskIds: taskEntries.map((t) => t.id), traceDir },
+  );
 }
