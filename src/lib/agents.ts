@@ -46,12 +46,19 @@ export function findPreset(name: string): AgentPreset | undefined {
   return AGENT_PRESETS.find((p) => p.name === lower);
 }
 
-/** Split "reviewer: check the auth flow" into preset + rest, if prefixed. */
-export function applyPreset(prompt: string): { preset?: AgentPreset; prompt: string } {
+/** Split "reviewer: check the auth flow" into preset + rest, if prefixed.
+ *  `taskText` is the raw text after the "preset:" prefix (set only when a
+ *  preset matched) — callers building a short label should use it instead
+ *  of re-slicing the original input, since the separator can include
+ *  arbitrary whitespace ("preset : task"). */
+export function applyPreset(prompt: string): { preset?: AgentPreset; prompt: string; taskText?: string } {
   const m = /^(\w+)\s*:\s*(.+)$/s.exec(prompt.trim());
   if (m) {
     const preset = findPreset(m[1]!);
-    if (preset) return { preset, prompt: `${preset.promptPrefix}\n\nTask: ${m[2]!.trim()}` };
+    if (preset) {
+      const taskText = m[2]!.trim();
+      return { preset, prompt: `${preset.promptPrefix}\n\nTask: ${taskText}`, taskText };
+    }
   }
   return { prompt: prompt.trim() };
 }

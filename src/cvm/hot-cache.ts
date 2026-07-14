@@ -60,6 +60,13 @@ export class HotCache<V = unknown> {
   set(key: string, value: V, ttlMs?: number): void {
     this.delete(key); // reset recency + byte accounting
     const bytes = sizeOf(value);
+    if (bytes > this.maxBytes) {
+      // A single value bigger than the whole byte budget can never satisfy
+      // evict()'s "under budget" condition while it's present — inserting
+      // it would evict every other entry (including itself, last). Treat
+      // it as uncacheable instead of wiping the cache to make room.
+      return;
+    }
     const entry: Entry<V> = {
       value,
       expiresAt: Date.now() + (ttlMs ?? this.ttlMs),

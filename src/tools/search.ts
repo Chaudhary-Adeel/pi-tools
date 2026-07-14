@@ -53,7 +53,10 @@ export function registerSearchTools(pi: ExtensionAPI): void {
       for await (const file of walk(root)) {
         if (signal?.aborted) break;
         if (hits.length >= max) break;
-        if (fileFilter && !fileFilter.test(file)) continue;
+        if (fileFilter) {
+          const rel = path.relative(root, file);
+          if (!fileFilter.test(rel) && !fileFilter.test(file)) continue;
+        }
         scanned++;
         let content: string;
         try {

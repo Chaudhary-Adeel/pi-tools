@@ -13,32 +13,16 @@
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, firstText, truncate } from "../lib/shared.ts";
+import { text, firstText, truncate, isPrivateHost } from "../lib/shared.ts";
 import { CDPClient, type ConsoleEntry } from "../lib/browser-cdp.ts";
 
 // ── SSRF / protocol safety ──────────────────────────────────────────────────
+//
+// Intentionally still allows "localhost" (unlike web_fetch's validateUrl) —
+// navigating to a local dev server (http://localhost:3000) is a core,
+// expected use of the browser tools, not an SSRF vector.
 
 const BLOCKED_PROTOCOLS = /^(file|ftp|data|javascript|vbscript):/i;
-
-const PRIVATE_IPV4 = [
-  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
-  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
-  /^192\.168\.\d{1,3}\.\d{1,3}$/,
-  /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
-  /^169\.254\.\d{1,3}\.\d{1,3}$/,
-  /^0\.0\.0\.0$/,
-];
-
-function isPrivateHost(hostname: string): boolean {
-  for (const re of PRIVATE_IPV4) {
-    if (re.test(hostname)) return true;
-  }
-  if (hostname === "::1" || hostname === "::") return true;
-  if (/^fc[0-9a-f]{2}:/i.test(hostname)) return true;
-  if (/^fd[0-9a-f]{2}:/i.test(hostname)) return true;
-  if (/^fe80:/i.test(hostname)) return true;
-  return false;
-}
 
 function validateBrowserUrl(rawUrl: string): string | null {
   if (BLOCKED_PROTOCOLS.test(rawUrl)) {

@@ -37,9 +37,9 @@ export function registerNewTaskCommand(pi: ExtensionAPI): void {
         input = modeMatch[2]!.trim();
       }
 
-      const { preset, prompt } = applyPreset(input);
+      const { preset, prompt, taskText } = applyPreset(input);
       const model = getSubagentModel(ctx.cwd);
-      const label = preset ? `${preset.name}: ${input.slice(preset.name.length + 1).trim()}` : input;
+      const label = preset ? `${preset.name}: ${taskText}` : input;
       const shortLabel = label.length > 60 ? label.slice(0, 57) + "…" : label;
 
       if (background) {
@@ -128,11 +128,12 @@ function runInBackground(
     if (task) updateTask(cwd, task.id, { status: "pending", notes: "failed to start" });
     notify(`✗ newTask ${id} failed to start`, "error");
   });
-  // If this session is still alive when the child exits, mark it done.
+  // If this session is still alive when the child exits, mark it done —
+  // or back to pending if it failed, so a nonzero exit doesn't read as success.
   proc.on("close", (code) => {
     if (task) {
       updateTask(cwd, task.id, {
-        status: "completed",
+        status: code === 0 ? "completed" : "pending",
         notes: `exit ${code ?? 0} — output: ${logFile}`,
       });
     }

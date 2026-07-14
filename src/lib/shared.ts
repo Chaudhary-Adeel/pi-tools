@@ -8,6 +8,30 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 /** Result shape returned by tool execute() — `details` is required in Pi ≥0.80. */
 export type ToolResult = AgentToolResult<unknown>;
 
+// ── SSRF: shared private/reserved-IP matcher (used by web_fetch + browser) ──
+
+const PRIVATE_IPV4 = [
+  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+  /^192\.168\.\d{1,3}\.\d{1,3}$/,
+  /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^169\.254\.\d{1,3}\.\d{1,3}$/,
+  /^0\.0\.0\.0$/,
+];
+
+/** True if `hostname` is a private, loopback, link-local, or reserved IP literal. */
+export function isPrivateHost(hostname: string): boolean {
+  for (const re of PRIVATE_IPV4) {
+    if (re.test(hostname)) return true;
+  }
+  // IPv6 loopback / link-local / unique-local
+  if (hostname === "::1" || hostname === "::") return true;
+  if (/^fc[0-9a-f]{2}:/i.test(hostname)) return true; // fc00::/7
+  if (/^fd[0-9a-f]{2}:/i.test(hostname)) return true; // fd00::/8
+  if (/^fe80:/i.test(hostname)) return true;           // fe80::/10
+  return false;
+}
+
 /** Wrap plain text into the AgentToolResult shape Pi expects. */
 export function text(s: string, details?: Record<string, unknown>): ToolResult {
   return { content: [{ type: "text", text: s }], details };

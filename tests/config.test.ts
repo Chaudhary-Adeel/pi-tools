@@ -8,6 +8,7 @@ import * as path from "node:path";
 
 import {
   CONFIG_DEFAULTS,
+  DEFAULT_SUBAGENT_MODEL,
   loadConfig,
   saveConfig,
   getGreetingName,
@@ -89,13 +90,18 @@ describe("getters with defaults", () => {
     assert.deepStrictEqual(getGitIdentity(tmpDir), { name: "me", email: "me@example.com" });
   });
 
-  test("getSubagentModel: unset → undefined (inherit)", () => {
-    assert.strictEqual(getSubagentModel(tmpDir), undefined);
+  test("getSubagentModel: unset → DEFAULT_SUBAGENT_MODEL", () => {
+    assert.strictEqual(getSubagentModel(tmpDir), DEFAULT_SUBAGENT_MODEL);
   });
 
   test("getSubagentModel: config value used", () => {
     saveConfig(tmpDir, { subagentModel: "small-model" }, "project");
     assert.strictEqual(getSubagentModel(tmpDir), "small-model");
+  });
+
+  test('getSubagentModel: "inherit" → undefined (use pi\'s default model)', () => {
+    saveConfig(tmpDir, { subagentModel: "inherit" }, "project");
+    assert.strictEqual(getSubagentModel(tmpDir), undefined);
   });
 
   test("getSubagentModel: env overrides config", () => {

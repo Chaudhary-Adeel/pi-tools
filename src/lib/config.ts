@@ -18,8 +18,10 @@ export interface PiToolsConfig {
   /** Git identity injected into `git commit` invocations. */
   gitName?: string;
   gitEmail?: string;
-  /** Model passed to subagent subprocesses (`--model`). Pick a lighter/cheaper
-   *  model than the main session — subagents do focused, disposable work. */
+  /** Model passed to subagent subprocesses (`--model`). Defaults to
+   *  DEFAULT_SUBAGENT_MODEL (a capable, agentic model) so subagents behave
+   *  reliably without babysitting; override to something lighter/cheaper if
+   *  your subtasks are simple, or "" to inherit the main session's model. */
   subagentModel?: string;
   /** Delegation harness (auto subagent-utilization steering). "off"/"false"
    *  disables hints and nudges. Default: on. */
@@ -105,9 +107,18 @@ export function getGitIdentity(cwd: string): { name: string; email: string } {
   };
 }
 
-/** Model for subagent subprocesses. undefined = inherit pi's default model. */
+/** Default subagent model — a capable, agentic model so spawned subagents
+ *  behave reliably without babysitting, rather than silently inheriting
+ *  whatever model the main session happens to be on. */
+export const DEFAULT_SUBAGENT_MODEL = "claude-fable-5";
+
+/** Model for subagent subprocesses. Falls back to DEFAULT_SUBAGENT_MODEL;
+ *  set subagentModel to the literal "inherit" to use pi's default model
+ *  instead (i.e. whatever the main session is running). */
 export function getSubagentModel(cwd: string): string | undefined {
-  return process.env.PI_SUBAGENT_MODEL || loadConfig(cwd).subagentModel || undefined;
+  const configured = process.env.PI_SUBAGENT_MODEL || loadConfig(cwd).subagentModel;
+  if (configured === "inherit") return undefined;
+  return configured || DEFAULT_SUBAGENT_MODEL;
 }
 
 function toggleEnabled(v: string | boolean | undefined): boolean {

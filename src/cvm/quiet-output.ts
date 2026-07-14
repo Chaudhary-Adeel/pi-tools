@@ -50,8 +50,12 @@ export interface CompactedOutput {
 /** Tools whose output should never be compacted by this generic layer —
  *  either because they already apply their own tailored truncation/preview
  *  (spawn_subagents' multi-section head/tail) or because a short-circuit
- *  reply (ask_user) is never large enough to matter. */
-export const QUIET_EXCLUDED_TOOLS: ReadonlySet<string> = new Set(["spawn_subagents", "ask_user"]);
+ *  reply (ask_user) is never large enough to matter. read_artifact is
+ *  excluded because compacting it would defeat its whole purpose: it exists
+ *  specifically to hand back a full previously-stashed artifact, so
+ *  re-truncating that result into another head+tail preview would make the
+ *  retrieval mechanism unable to ever surface the middle of a large stash. */
+export const QUIET_EXCLUDED_TOOLS: ReadonlySet<string> = new Set(["spawn_subagents", "ask_user", "read_artifact"]);
 
 // Quiet Output runs at context-assembly time (the `context` event), which
 // re-scans the ENTIRE message history before every single LLM call. Past
