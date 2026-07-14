@@ -18,10 +18,11 @@ export interface PiToolsConfig {
   /** Git identity injected into `git commit` invocations. */
   gitName?: string;
   gitEmail?: string;
-  /** Model passed to subagent subprocesses (`--model`). Defaults to
-   *  DEFAULT_SUBAGENT_MODEL (a capable, agentic model) so subagents behave
-   *  reliably without babysitting; override to something lighter/cheaper if
-   *  your subtasks are simple, or "" to inherit the main session's model. */
+  /** Model passed to subagent subprocesses (`--model`). Empty/unset =
+   *  inherit whatever model the main session is running. Behavioral
+   *  maturity (matching a top-tier agentic model) comes from the injected
+   *  operating prompt (see lib/deepseek-prompt.ts), not from forcing a
+   *  specific model string — that way it applies under any backend. */
   subagentModel?: string;
   /** Delegation harness (auto subagent-utilization steering). "off"/"false"
    *  disables hints and nudges. Default: on. */
@@ -107,18 +108,9 @@ export function getGitIdentity(cwd: string): { name: string; email: string } {
   };
 }
 
-/** Default subagent model — a capable, agentic model so spawned subagents
- *  behave reliably without babysitting, rather than silently inheriting
- *  whatever model the main session happens to be on. */
-export const DEFAULT_SUBAGENT_MODEL = "claude-fable-5";
-
-/** Model for subagent subprocesses. Falls back to DEFAULT_SUBAGENT_MODEL;
- *  set subagentModel to the literal "inherit" to use pi's default model
- *  instead (i.e. whatever the main session is running). */
+/** Model for subagent subprocesses. undefined = inherit pi's default model. */
 export function getSubagentModel(cwd: string): string | undefined {
-  const configured = process.env.PI_SUBAGENT_MODEL || loadConfig(cwd).subagentModel;
-  if (configured === "inherit") return undefined;
-  return configured || DEFAULT_SUBAGENT_MODEL;
+  return process.env.PI_SUBAGENT_MODEL || loadConfig(cwd).subagentModel || undefined;
 }
 
 function toggleEnabled(v: string | boolean | undefined): boolean {

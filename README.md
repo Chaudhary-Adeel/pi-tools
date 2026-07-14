@@ -59,7 +59,7 @@ sections below for how each works:
 | `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
 | `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
-| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); defaults to `claude-fable-5`, configurable via `/config subagentModel`; nesting blocked; runs in the background by default so the main agent keeps working (pass `background: false` to block and wait instead); every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
+| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked; runs in the background by default so the main agent keeps working (pass `background: false` to block and wait instead); every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 | `memory_search` | Search across all memory files (system + learnings) for a query |
 
@@ -179,7 +179,7 @@ Git commits through Pi are signed with the configured git identity (default `ade
 **`/config` settings** (persisted to `.pi/pi-tools.json` per-project or `~/.pi/pi-tools.json` globally):
 - `gitName` / `gitEmail` — identity injected into `git commit` (default: `adeel.bot`)
 - `greetingName` — name shown in the footer (default: Muhammad Adeel Chaudhary)
-- `subagentModel` — model for subagents and `/newTask` (default: `claude-fable-5`; set to `"inherit"` to use the main session's model instead)
+- `subagentModel` — lighter model for subagents and `/newTask` (default: inherit session model)
 - `autoDelegate` — delegation-harness hints/nudges, `on`/`off` (default: on)
 - `memoryHealth` — autonomous memory-healing sweeps, `on`/`off` (default: on; `/heal` always works regardless)
 - `quietOutput` — compact oversized tool output before the model sees it (built-in tools included), `on`/`off` (default: on)

@@ -10,7 +10,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   CONFIG_DEFAULTS,
-  DEFAULT_SUBAGENT_MODEL,
   loadConfig,
   saveConfig,
   getSubagentModel,
@@ -29,7 +28,7 @@ const FIELDS: Field[] = [
   { key: "gitName", label: "Git name", hint: "user.name injected into git commits" },
   { key: "gitEmail", label: "Git email", hint: "user.email injected into git commits" },
   { key: "greetingName", label: "Greetings name", hint: "name shown in the footer" },
-  { key: "subagentModel", label: "Subagent model", hint: `model for spawn_subagents/newTask (empty = ${DEFAULT_SUBAGENT_MODEL}; "inherit" = main session's model)` },
+  { key: "subagentModel", label: "Subagent model", hint: "lighter model for spawn_subagents (empty = inherit)" },
   { key: "autoDelegate", label: "Auto-delegate", hint: "delegation harness hints/nudges: on or off (default on)" },
   { key: "memoryHealth", label: "Memory health", hint: "autonomous memory healing sweeps: on or off (default on)" },
   { key: "quietOutput", label: "Quiet output", hint: "compact oversized tool output before the model sees it: on or off (default on)" },
