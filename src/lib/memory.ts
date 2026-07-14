@@ -47,6 +47,19 @@ const SYSTEM_DIR = "system";
 const LEARNINGS_DIR = "learnings";
 const PROGRESS_FILE = "progress.md";
 
+const MEMORY_EDIT_TOOLS = new Set(["edit", "write"]);
+
+/** True if a tool_result event's edit/write targeted a file under
+ *  .pi/memory/ — shared by the memory-git auto-commit hook and the Memory
+ *  Health Engine's incremental sweep trigger, which both need to detect the
+ *  same thing but react to it independently. */
+export function isMemoryFileEdit(toolName: string, input: unknown): boolean {
+  if (!MEMORY_EDIT_TOOLS.has(toolName)) return false;
+  const i = input as { path?: string; file_path?: string } | undefined;
+  const filePath = i?.path ?? i?.file_path ?? "";
+  return filePath.includes(`${MEMORY_ROOT}/`);
+}
+
 // ── discovery ───────────────────────────────────────────────────────────────
 
 /** Module-level cache: findMemoryRoot result by resolved cwd. The memory root
@@ -101,12 +114,13 @@ export function ensureMemoryDirs(cwd: string): string {
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
-/** Parse a memory file into frontmatter + body. */
-export function parseMemoryFile(raw: string): { frontmatter: Record<string, unknown>; body: string } {
-  const m = raw.match(FRONTMATTER_RE);
-  if (!m) return { frontmatter: {}, body: raw };
+/** Parse "key: value" lines from a frontmatter block into a typed record —
+ *  shared by parseMemoryFile (full parse) and parseFrontmatterOnly
+ *  (metadata-only fast path), which otherwise duplicated this line-by-line
+ *  quote-stripping/number-parsing loop verbatim. */
+function parseFrontmatterLines(fmText: string): Record<string, unknown> {
   const fm: Record<string, unknown> = {};
-  for (const line of m[1]!.split("\n")) {
+  for (const line of fmText.split("\n")) {
     const idx = line.indexOf(":");
     if (idx === -1) continue;
     const key = line.slice(0, idx).trim();
@@ -125,7 +139,14 @@ export function parseMemoryFile(raw: string): { frontmatter: Record<string, unkn
       fm[key] = value;
     }
   }
-  return { frontmatter: fm, body: m[2] ?? "" };
+  return fm;
+}
+
+/** Parse a memory file into frontmatter + body. */
+export function parseMemoryFile(raw: string): { frontmatter: Record<string, unknown>; body: string } {
+  const m = raw.match(FRONTMATTER_RE);
+  if (!m) return { frontmatter: {}, body: raw };
+  return { frontmatter: parseFrontmatterLines(m[1]!), body: m[2] ?? "" };
 }
 
 /** Lightweight metadata from a memory file (frontmatter only, no body). */
@@ -194,25 +215,7 @@ function parseFrontmatterOnly(raw: string): Record<string, unknown> {
   const closeIdx = raw.indexOf("\n---", 3);
   if (closeIdx === -1) return {};
   const fmText = raw.slice(raw[3] === "\n" ? 4 : 3, closeIdx);
-  const fm: Record<string, unknown> = {};
-  for (const line of fmText.split("\n")) {
-    const idx = line.indexOf(":");
-    if (idx === -1) continue;
-    const key = line.slice(0, idx).trim();
-    let value: string = line.slice(idx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (/^\d+(\.\d+)?$/.test(value)) {
-      fm[key] = Number(value);
-    } else if (value === "true" || value === "false") {
-      fm[key] = value === "true";
-    } else {
-      fm[key] = value;
-    }
-  }
-  return fm;
+  return parseFrontmatterLines(fmText);
 }
 
 /** Load all always-injected system memory files. */
@@ -222,7 +225,10 @@ export function loadSystemMemory(cwd: string): MemoryFile[] {
   return loadMemoryDir(path.join(root, SYSTEM_DIR));
 }
 
-/** Load all on-demand learning files (descriptions only, not full content). */
+/** Load all on-demand learning files, including full content — needed by
+ *  callers like computeFootprint that total up real byte/token sizes.
+ *  Metadata-only consumers (descriptions, priority) should use the cheaper
+ *  loadMemoryDirMetadata instead, as formatLearningSummaries does. */
 export function listLearnings(cwd: string): MemoryFile[] {
   const root = findMemoryRoot(cwd);
   if (!root) return [];
@@ -319,13 +325,6 @@ export function loadProgress(cwd: string): Progress | null {
       nextSteps.push(nm[1]!.trim());
       continue;
     }
-  }
-
-  // Validate status
-  const VALID_STATUSES = new Set(["pending", "in_progress", "done", "blocked"]);
-  if (!VALID_STATUSES.has(status)) {
-    console.error(`[pi-tools] Unrecognized status "${status}" in progress.md, defaulting to "pending"`);
-    status = "pending";
   }
 
   const lastUpdated = fs.statSync(fp).mtime.toISOString();

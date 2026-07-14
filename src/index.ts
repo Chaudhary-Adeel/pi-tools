@@ -22,7 +22,7 @@ import { registerBrowserTools } from "./tools/browser.ts";
 import { registerPrompt } from "./prompt.ts";
 import { getSubagentUsage, resetSubagentTokens } from "./lib/subagent-tokens.ts";
 import { registerCodingPrompt } from "./lib/deepseek-prompt.ts";
-import { ensureMemoryDirs } from "./lib/memory.ts";
+import { ensureMemoryDirs, isMemoryFileEdit } from "./lib/memory.ts";
 import { registerMemoryCommand } from "./commands/memory-command.ts";
 import { registerMemoryMapTool } from "./tools/memory.ts";
 import { registerMemorySearchTool } from "./tools/memory-search.ts";
@@ -42,10 +42,11 @@ import { registerTaskTool } from "./tools/tasks.ts";
 import { registerContextResolveTool } from "./tools/context-resolve.ts";
 import { registerReadArtifactTool } from "./tools/read-artifact.ts";
 import { registerQuietOutput } from "./lib/quiet-output-register.ts";
-import { registerCvmCommand } from "./commands/cvm-command.ts";
+import { registerCvmCommand, runCvmGc } from "./commands/cvm-command.ts";
 import { resetDeltaLedger } from "./cvm/delta.ts";
 import { resetCvmMetrics } from "./cvm/metrics.ts";
 import { indexRepo } from "./cvm/symbols.ts";
+import { getWarmStore } from "./cvm/warm-store.ts";
 import { getGreetingName, getGitIdentity } from "./lib/config.ts";
 import { registerDelegationHarness } from "./lib/harness-register.ts";
 import { registerMemoryHealth } from "./lib/memory-health-register.ts";
@@ -53,6 +54,7 @@ import { getRepoName } from "./lib/shared.ts";
 import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
 
 const GIT_COMMIT_RE = /\bgit\s+commit\b/;
+const CVM_GC_INTERVAL_MS = 24 * 60 * 60_000;
 
 export default function (pi: ExtensionAPI): void {
   // Unique tools.  Pi's built-ins (write, edit, bash) cover the rest —
@@ -204,11 +206,7 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("tool_result", (event) => {
     if (pi.getFlag("memory-git") !== true) return;
-    const memTools = new Set(["edit", "write"]);
-    if (!memTools.has(event.toolName)) return;
-    const input = event.input as { path?: string; file_path?: string };
-    const filePath = input?.path ?? input?.file_path ?? "";
-    if (filePath.includes(".pi/memory/")) memoryModified = true;
+    if (isMemoryFileEdit(event.toolName, event.input)) memoryModified = true;
   });
 
   pi.on("turn_end", (_event, ctx) => {
@@ -255,6 +253,30 @@ export default function (pi: ExtensionAPI): void {
 
     // Auto-bootstrap memory on first run — create starter files from codebase
     autoBootstrapMemory(ctx.cwd);
+
+    // Cold-store objects and expired HTTP cache rows otherwise accumulate
+    // forever — reclaim them at most once a day (timestamp persisted so
+    // restarts don't re-run it every session). Deferred + silent unless
+    // something was actually freed, mirroring the memory-health sweep.
+    try {
+      const warm = getWarmStore(ctx.cwd);
+      const last = Number(warm.kvGet("cvm:lastGc") ?? 0);
+      if (Date.now() - last >= CVM_GC_INTERVAL_MS) {
+        warm.kvSet("cvm:lastGc", String(Date.now()));
+        setTimeout(() => {
+          try {
+            const { objectsDeleted, bytesFreed } = runCvmGc(ctx.cwd);
+            if (objectsDeleted > 0) {
+              ctx.ui.notify(`🗑 CVM gc: reclaimed ${objectsDeleted} stale object(s) (${(bytesFreed / 1024).toFixed(0)}KB)`, "info");
+            }
+          } catch {
+            /* gc must never break a session */
+          }
+        }, 5000);
+      }
+    } catch {
+      /* fall through — a failed timestamp read shouldn't block startup */
+    }
   });
 
   // CVM correctness: compaction and tree navigation destroy prior tool

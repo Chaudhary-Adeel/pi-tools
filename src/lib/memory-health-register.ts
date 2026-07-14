@@ -16,6 +16,7 @@ import {
   formatHealthReport,
 } from "./memory-health.ts";
 import { isMemoryHealthEnabled } from "./config.ts";
+import { isMemoryFileEdit } from "./memory.ts";
 import { getWarmStore } from "../cvm/warm-store.ts";
 import { isSubagentProcess } from "../tools/subagents.ts";
 
@@ -70,10 +71,7 @@ export function registerMemoryHealth(pi: ExtensionAPI): void {
   // ── incremental: heal right after a turn that edited memory files ──
   let memoryTouched = false;
   pi.on("tool_result", (event) => {
-    if (event.toolName !== "edit" && event.toolName !== "write") return;
-    const input = event.input as { path?: string; file_path?: string };
-    const p = input?.path ?? input?.file_path ?? "";
-    if (p.includes(".pi/memory/")) memoryTouched = true;
+    if (isMemoryFileEdit(event.toolName, event.input)) memoryTouched = true;
   });
   pi.on("turn_end", (_event, ctx) => {
     if (!memoryTouched) return;

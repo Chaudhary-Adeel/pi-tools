@@ -70,6 +70,14 @@ export interface WarmStore {
 
   httpGet(url: string): HttpRecord | undefined;
   httpUpsert(rec: HttpRecord): void;
+  /** All body fingerprints currently referenced by the http table — the
+   *  "live set" cold-store GC must never delete. */
+  httpAllFps(): string[];
+  /** Delete http rows whose ttl_at is older than `cutoff` (epoch ms).
+   *  Returns the number of rows deleted. Rows past their TTL are still kept
+   *  around briefly (see the GC's grace period) since a URL revisited soon
+   *  after expiry can still benefit from a conditional GET. */
+  httpDeleteStale(cutoff: number): number;
 
   transaction<T>(fn: () => T): T;
   close(): void;
@@ -234,6 +242,18 @@ class SqliteWarmStore implements WarmStore {
     ).run(rec.url, rec.etag, rec.lastModified, rec.fp, rec.fetchedAt, rec.ttlAt, rec.status, rec.contentType);
   }
 
+  httpAllFps(): string[] {
+    const rows = this.stmt("SELECT DISTINCT fp FROM http").all() as Array<{ fp: string }>;
+    return rows.map((r) => r.fp);
+  }
+
+  httpDeleteStale(cutoff: number): number {
+    const before = (this.stmt("SELECT COUNT(*) AS n FROM http").get() as { n: number }).n;
+    this.stmt("DELETE FROM http WHERE ttl_at < ?").run(cutoff);
+    const after = (this.stmt("SELECT COUNT(*) AS n FROM http").get() as { n: number }).n;
+    return before - after;
+  }
+
   transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN");
     try {
@@ -314,6 +334,14 @@ class MemoryWarmStore implements WarmStore {
 
   httpGet(url: string): HttpRecord | undefined { return this.http.get(url); }
   httpUpsert(rec: HttpRecord): void { this.http.set(rec.url, rec); }
+  httpAllFps(): string[] { return [...new Set([...this.http.values()].map((r) => r.fp))]; }
+  httpDeleteStale(cutoff: number): number {
+    let n = 0;
+    for (const [url, rec] of this.http) {
+      if (rec.ttlAt < cutoff) { this.http.delete(url); n++; }
+    }
+    return n;
+  }
 
   transaction<T>(fn: () => T): T { return fn(); }
   close(): void { /* nothing to release */ }

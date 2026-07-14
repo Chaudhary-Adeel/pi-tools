@@ -65,3 +65,80 @@ export function coldStats(cwd: string): { objects: number; bytes: number } {
   }
   return { objects, bytes };
 }
+
+export interface ColdPruneOptions {
+  /** Objects older than this (by mtime) become eligible for deletion,
+   *  unless their fingerprint is in `liveFps`. Default 14 days. */
+  maxAgeMs?: number;
+  /** Hard cap on total retained bytes; if still over budget after the
+   *  age pass, oldest eligible objects are removed next. Default 200MB. */
+  maxBytes?: number;
+  /** Fingerprints that must never be deleted — e.g. still referenced by an
+   *  unexpired warm-store http row (see WarmStore.httpAllFps). Objects
+   *  outside this set (like Quiet Output artifact stashes, which have no
+   *  persistent index) are reclaimed purely by age/size, which is why the
+   *  default maxAgeMs is generous — it's the only safety margin they get. */
+  liveFps?: ReadonlySet<string>;
+}
+
+/** Reclaim disk space: cold objects accumulate forever otherwise (nothing
+ *  else in the CVM ever deletes them). Two passes — age first, then size
+ *  cap if still over budget — both skip anything in `liveFps`. */
+export function coldPrune(cwd: string, opts: ColdPruneOptions = {}): { deleted: number; bytesFreed: number } {
+  const maxAgeMs = opts.maxAgeMs ?? 14 * 24 * 60 * 60_000;
+  const maxBytes = opts.maxBytes ?? 200 * 1024 * 1024;
+  const liveFps = opts.liveFps ?? new Set<string>();
+  const root = path.join(cvmDir(cwd), "objects");
+  const now = Date.now();
+
+  interface Obj { file: string; fp: string; mtime: number; size: number }
+  const objs: Obj[] = [];
+  try {
+    for (const shard of fs.readdirSync(root)) {
+      const dir = path.join(root, shard);
+      for (const f of fs.readdirSync(dir)) {
+        const file = path.join(dir, f);
+        const st = fs.statSync(file);
+        objs.push({ file, fp: shard + f.replace(/\.br$/, ""), mtime: st.mtimeMs, size: st.size });
+      }
+    }
+  } catch {
+    return { deleted: 0, bytesFreed: 0 };
+  }
+
+  let deleted = 0;
+  let bytesFreed = 0;
+  const survivors: Obj[] = [];
+  for (const o of objs) {
+    if (!liveFps.has(o.fp) && now - o.mtime > maxAgeMs) {
+      try {
+        fs.unlinkSync(o.file);
+        deleted++;
+        bytesFreed += o.size;
+      } catch {
+        /* already gone */
+      }
+    } else {
+      survivors.push(o);
+    }
+  }
+
+  let totalBytes = survivors.reduce((s, o) => s + o.size, 0);
+  if (totalBytes > maxBytes) {
+    survivors.sort((a, b) => a.mtime - b.mtime); // oldest first
+    for (const o of survivors) {
+      if (totalBytes <= maxBytes) break;
+      if (liveFps.has(o.fp)) continue;
+      try {
+        fs.unlinkSync(o.file);
+        deleted++;
+        bytesFreed += o.size;
+        totalBytes -= o.size;
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  return { deleted, bytesFreed };
+}
