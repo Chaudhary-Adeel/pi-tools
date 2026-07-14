@@ -24,8 +24,8 @@ export interface PiToolsConfig {
    *  operating prompt (see lib/deepseek-prompt.ts), not from forcing a
    *  specific model string — that way it applies under any backend. */
   subagentModel?: string;
-  /** Delegation harness (auto subagent-utilization steering). "off"/"false"
-   *  disables hints and nudges. Default: on. */
+  /** Behavioral harness (auto subagent-utilization steering + unverified-
+   *  change nudges). "off"/"false" disables hints and nudges. Default: on. */
   autoDelegate?: string | boolean;
   /** Memory Health Engine (autonomous scoring/healing of .pi/memory).
    *  "off"/"false" disables sweeps; /heal still works. Default: on. */
