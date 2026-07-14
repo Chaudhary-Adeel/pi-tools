@@ -21,14 +21,17 @@ const PRIVATE_IPV4 = [
 
 /** True if `hostname` is a private, loopback, link-local, or reserved IP literal. */
 export function isPrivateHost(hostname: string): boolean {
+  // URL.prototype.hostname keeps brackets around IPv6 literals ("[::1]") —
+  // strip them so callers passing a raw `new URL(...).hostname` still match.
+  const h = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
   for (const re of PRIVATE_IPV4) {
-    if (re.test(hostname)) return true;
+    if (re.test(h)) return true;
   }
   // IPv6 loopback / link-local / unique-local
-  if (hostname === "::1" || hostname === "::") return true;
-  if (/^fc[0-9a-f]{2}:/i.test(hostname)) return true; // fc00::/7
-  if (/^fd[0-9a-f]{2}:/i.test(hostname)) return true; // fd00::/8
-  if (/^fe80:/i.test(hostname)) return true;           // fe80::/10
+  if (h === "::1" || h === "::") return true;
+  if (/^fc[0-9a-f]{2}:/i.test(h)) return true; // fc00::/7
+  if (/^fd[0-9a-f]{2}:/i.test(h)) return true; // fd00::/8
+  if (/^fe80:/i.test(h)) return true;           // fe80::/10
   return false;
 }
 

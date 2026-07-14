@@ -31,7 +31,7 @@ async function resolvesToPrivateHost(hostname: string): Promise<boolean> {
 }
 
 /** Validate a URL for SSRF — returns null if OK, error message string if blocked. */
-async function validateUrl(rawUrl: string): Promise<string | null> {
+export async function validateUrl(rawUrl: string): Promise<string | null> {
   if (!/^https?:\/\//i.test(rawUrl)) {
     return `Refusing to fetch non-http(s) URL: ${rawUrl}`;
   }
