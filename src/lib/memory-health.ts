@@ -276,7 +276,10 @@ export function analyzeMemoryHealth(
     }
 
     const ageDays = (now - e.mtimeMs) / 86_400_000;
-    if (e.kind === "learning" && ageDays > 45) {
+    // Flag staleness at the same age the expiry action later archives at
+    // (thresholds.expireAfterDays) — a file shouldn't reach expiry without
+    // ever having been surfaced as stale in the report first.
+    if (e.kind === "learning" && ageDays > thresholds.expireAfterDays) {
       score -= 15;
       issues.push(`stale (${Math.round(ageDays)}d untouched)`);
     }

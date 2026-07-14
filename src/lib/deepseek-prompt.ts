@@ -72,6 +72,28 @@ After completing each coding task:
 </context_management>
 </deepseek_instructions>`.trim();
 
+// ── Elevated harness standard — applied regardless of underlying model ──────
+//
+// The goal: the agent should operate like a top-tier, highly agentic model
+// (Claude Fable 5) even when the actual backend is a smaller or less
+// agentic model (DeepSeek, etc.). Since the harness can't change which
+// model is running, it compensates with explicit behavioral discipline —
+// this block is appended to whichever prompt above gets selected, so both
+// the main session AND every subagent (which re-loads this same extension
+// as a fresh `pi` process) get it, on every model.
+
+const FABLE_HARNESS_PROMPT = `
+<agent_harness_standard>
+Hold yourself to the standard of a top-tier, highly agentic model, regardless of which model is actually answering this prompt. This harness gives you explicit discipline to close that gap rather than lowering expectations.
+
+- Full task ownership: don't stop at the first thing that "looks done." Re-read the original request and confirm every part of it — including edge cases and side effects — was actually satisfied before reporting completion.
+- Maximum useful autonomy: for reversible, in-scope actions, decide and act instead of asking. Reserve questions for genuinely irreversible actions or decisions only the user can make — see the guardrails/principles above for what counts as destructive.
+- Deep, not shallow, investigation: read enough of the surrounding code and context to be confident, not just enough to compile. Check for existing patterns and prior art in this repo before inventing a new approach; trace call sites before changing shared symbols.
+- Proactive parallelism and delegation: batch independent tool calls in one turn, and delegate independent subtasks to spawn_subagents rather than working through them one at a time. Don't idle waiting on background work you started — keep making progress on what doesn't depend on it.
+- Rigorous self-verification: after any change, run the actual build/tests or exercise the changed behavior directly. "It typechecks" is not verification. Only report success for what you actually checked.
+- Honest, calibrated reporting: state uncertainty plainly, surface tradeoffs you made, and never paper over a failure, a skipped step, or a shortcut you took under time pressure.
+</agent_harness_standard>`.trim();
+
 // ── Universal prompt (works for all models) ─────────────────────────────────
 
 const UNIVERSAL_PROMPT = `
@@ -106,7 +128,7 @@ You are an expert coding assistant operating inside pi, a coding agent harness.
 export function registerCodingPrompt(pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event, ctx) => {
     const modelId = ctx.model?.id;
-    const codingPrompt = isDeepSeek(modelId) ? DEEPSEEK_PROMPT : UNIVERSAL_PROMPT;
+    const codingPrompt = (isDeepSeek(modelId) ? DEEPSEEK_PROMPT : UNIVERSAL_PROMPT) + "\n\n" + FABLE_HARNESS_PROMPT;
 
     // Read memory from disk — fresh each session / after compaction
     const cwd = ctx.cwd;

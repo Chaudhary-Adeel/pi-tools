@@ -1,8 +1,9 @@
 // web_fetch + web_search
+import * as dns from "node:dns/promises";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { text, firstText, truncate, htmlToText, formatBytes } from "../lib/shared.ts";
+import { text, firstText, truncate, htmlToText, formatBytes, isPrivateHost } from "../lib/shared.ts";
 import { cachedFetch } from "../cvm/http-cache.ts";
 import { deltaCheck, deltaRecord } from "../cvm/delta.ts";
 
@@ -10,30 +11,27 @@ const UA =
   "Mozilla/5.0 (compatible; pi-coding-toolkit/0.1; +https://pi.dev)";
 
 // ── SSRF protection ──────────────────────────────────────────────────────────
+//
+// Three layers: (1) block private/loopback/link-local IP literals and the
+// "localhost" hostname outright, (2) resolve every other hostname via DNS
+// and block it if it resolves to a private address (catches DNS rebinding
+// to internal services and the cloud metadata IP), (3) re-run this same
+// check on every redirect hop (see cachedFetch's validateUrl option) so a
+// public URL can't 302 its way to an internal target.
 
-const PRIVATE_IPV4 = [
-  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
-  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
-  /^192\.168\.\d{1,3}\.\d{1,3}$/,
-  /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
-  /^169\.254\.\d{1,3}\.\d{1,3}$/,
-  /^0\.0\.0\.0$/,
-];
-
-function isPrivateHost(hostname: string): boolean {
-  for (const re of PRIVATE_IPV4) {
-    if (re.test(hostname)) return true;
+async function resolvesToPrivateHost(hostname: string): Promise<boolean> {
+  try {
+    const records = await dns.lookup(hostname, { all: true, verbatim: true });
+    return records.some((r) => isPrivateHost(r.address));
+  } catch {
+    // Unresolvable host — let the fetch itself fail naturally rather than
+    // guessing; this isn't a confirmed-private result.
+    return false;
   }
-  // IPv6 loopback / link-local / unique-local
-  if (hostname === "::1" || hostname === "::") return true;
-  if (/^fc[0-9a-f]{2}:/i.test(hostname)) return true; // fc00::/7
-  if (/^fd[0-9a-f]{2}:/i.test(hostname)) return true; // fd00::/8
-  if (/^fe80:/i.test(hostname)) return true;           // fe80::/10
-  return false;
 }
 
 /** Validate a URL for SSRF — returns null if OK, error message string if blocked. */
-function validateUrl(rawUrl: string): string | null {
+export async function validateUrl(rawUrl: string): Promise<string | null> {
   if (!/^https?:\/\//i.test(rawUrl)) {
     return `Refusing to fetch non-http(s) URL: ${rawUrl}`;
   }
@@ -43,8 +41,15 @@ function validateUrl(rawUrl: string): string | null {
   } catch {
     return `Invalid URL: ${rawUrl}`;
   }
+  const lower = hostname.toLowerCase();
+  if (lower === "localhost" || lower.endsWith(".localhost")) {
+    return `Refusing to fetch URL targeting localhost: ${hostname}`;
+  }
   if (isPrivateHost(hostname)) {
     return `Refusing to fetch URL targeting private/reserved IP: ${hostname}`;
+  }
+  if (await resolvesToPrivateHost(hostname)) {
+    return `Refusing to fetch URL: ${hostname} resolves to a private/reserved IP`;
   }
   return null;
 }
@@ -84,7 +89,7 @@ export function registerWebTools(pi: ExtensionAPI): void {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { url, max_chars, raw } = params;
-      const urlError = validateUrl(url);
+      const urlError = await validateUrl(url);
       if (urlError) throw new Error(urlError);
       // CVM HTTP cache: fresh copies skip the network entirely; stale ones
       // revalidate with ETag/Last-Modified and 304s cost no download.
@@ -94,6 +99,9 @@ export function registerWebTools(pi: ExtensionAPI): void {
           headers: { "User-Agent": UA, Accept: "*/*" },
           signal,
           ttlMs: 5 * 60_000,
+          // Re-validate every redirect hop too, so a public URL can't 302
+          // its way to an internal target.
+          validateUrl,
         });
       } catch (e) {
         throw new Error(`Network error fetching ${url}: ${(e as Error).message}`);

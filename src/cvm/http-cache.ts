@@ -28,6 +28,38 @@ export interface CachedFetchOptions {
   ttlMs?: number;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /**
+   * Called with each URL about to be fetched — including every redirect
+   * hop — before the request is made. Return an error string to abort, or
+   * null/undefined to allow. Without this, `redirect: "follow"` would let a
+   * validated URL 302 its way to an unvalidated (e.g. internal) target.
+   */
+  validateUrl?: (url: string) => Promise<string | null> | string | null;
+}
+
+const MAX_REDIRECTS = 5;
+
+/** Follow redirects manually, re-running `validateUrl` on every hop. */
+async function fetchFollowingRedirects(
+  startUrl: string,
+  init: RequestInit,
+  validateUrl: CachedFetchOptions["validateUrl"],
+): Promise<{ res: Response; finalUrl: string }> {
+  let currentUrl = startUrl;
+  for (let hop = 0; ; hop++) {
+    if (hop > MAX_REDIRECTS) {
+      throw new Error(`Too many redirects fetching ${startUrl}`);
+    }
+    if (validateUrl) {
+      const err = await validateUrl(currentUrl);
+      if (err) throw new Error(err);
+    }
+    const res = await fetch(currentUrl, { ...init, redirect: "manual" });
+    const isRedirect = res.status >= 300 && res.status < 400;
+    const location = res.headers.get("location");
+    if (!isRedirect || !location) return { res, finalUrl: currentUrl };
+    currentUrl = new URL(location, currentUrl).toString();
+  }
 }
 
 export async function cachedFetch(
@@ -65,19 +97,31 @@ export async function cachedFetch(
     if (cached.lastModified) headers["If-Modified-Since"] = cached.lastModified;
   }
 
-  const res = await fetch(url, { headers, redirect: "follow", signal: options.signal });
+  const { res, finalUrl } = await fetchFollowingRedirects(
+    url,
+    { headers, signal: options.signal },
+    options.validateUrl,
+  );
 
   if (res.status === 304 && cached && cachedBody !== undefined) {
     m.hits++;
     m.notModified++;
     m.bytesSaved += cachedBody.length;
-    warm.httpUpsert({ ...cached, fetchedAt: now, ttlAt: now + ttlMs });
+    // Honor rotated validators from the 304 response instead of assuming
+    // the old ones still apply.
+    warm.httpUpsert({
+      ...cached,
+      etag: res.headers.get("etag") ?? cached.etag,
+      lastModified: res.headers.get("last-modified") ?? cached.lastModified,
+      fetchedAt: now,
+      ttlAt: now + ttlMs,
+    });
     return {
       status: cached.status,
       contentType: cached.contentType,
       body: cachedBody,
       source: "revalidated",
-      finalUrl: url,
+      finalUrl,
     };
   }
 
@@ -88,23 +132,22 @@ export async function cachedFetch(
   // Cap what we persist: brotliCompressSync on multi-MB bodies would block
   // the event loop (and the TUI). Oversized bodies are returned uncached.
   const MAX_CACHED_BODY = 4 * 1024 * 1024;
-  if (res.status === 200 && body.length <= MAX_CACHED_BODY) {
+  // Honor Cache-Control: no-store by not persisting at all — check BEFORE
+  // writing to cold storage, so no-store bodies never touch disk.
+  const cc = res.headers.get("cache-control") ?? "";
+  if (res.status === 200 && body.length <= MAX_CACHED_BODY && !/\bno-store\b/i.test(cc)) {
     const fp = coldPut(cwd, body);
-    // Honor Cache-Control: no-store by not persisting at all.
-    const cc = res.headers.get("cache-control") ?? "";
-    if (!/\bno-store\b/i.test(cc)) {
-      warm.httpUpsert({
-        url,
-        etag: res.headers.get("etag"),
-        lastModified: res.headers.get("last-modified"),
-        fp,
-        fetchedAt: now,
-        ttlAt: now + ttlMs,
-        status: res.status,
-        contentType,
-      });
-    }
+    warm.httpUpsert({
+      url,
+      etag: res.headers.get("etag"),
+      lastModified: res.headers.get("last-modified"),
+      fp,
+      fetchedAt: now,
+      ttlAt: now + ttlMs,
+      status: res.status,
+      contentType,
+    });
   }
 
-  return { status: res.status, contentType, body, source: "network", finalUrl: res.url || url };
+  return { status: res.status, contentType, body, source: "network", finalUrl };
 }

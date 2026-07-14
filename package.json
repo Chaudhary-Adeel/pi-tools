@@ -1,19 +1,19 @@
 {
   "name": "pi-coding-toolkit",
   "version": "0.1.0",
-  "description": "A batteries-included Pi package: web fetch/search, file I/O, shell, code search, ask-user, and parallel subagent spawning, plus a token-efficient system prompt.",
+  "description": "A batteries-included Pi package: web fetch/search, file I/O, code search, ask-user, and parallel subagent spawning, plus a token-efficient system prompt.",
   "keywords": [
     "pi-package"
   ],
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
-  },
-  "dependencies": {
-    "typescript": "^6.0.3"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.ts",
@@ -21,6 +21,7 @@
     "reinstall": "bash install.sh"
   },
   "devDependencies": {
-    "@types/node": "^25.9.2"
+    "@types/node": "^25.9.2",
+    "typescript": "^6.0.3"
   }
 }

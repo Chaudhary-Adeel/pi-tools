@@ -163,7 +163,7 @@ export function computeStats(cwd: string, tokenBudget?: number): MemoryStats {
 const MAP_HEADER = `# Memory Map
 
 > Auto-generated index of the agent's persistent memory in \`.pi/memory/\`.
-> Regenerate with \`/update_memory_map\` or by asking the agent to update it.
+> Regenerate with the \`memory_map\` tool (action: "generate") or by asking the agent to update it.
 
 `;
 

@@ -18,8 +18,11 @@ export interface PiToolsConfig {
   /** Git identity injected into `git commit` invocations. */
   gitName?: string;
   gitEmail?: string;
-  /** Model passed to subagent subprocesses (`--model`). Pick a lighter/cheaper
-   *  model than the main session — subagents do focused, disposable work. */
+  /** Model passed to subagent subprocesses (`--model`). Empty/unset =
+   *  inherit whatever model the main session is running. Behavioral
+   *  maturity (matching a top-tier agentic model) comes from the injected
+   *  operating prompt (see lib/deepseek-prompt.ts), not from forcing a
+   *  specific model string — that way it applies under any backend. */
   subagentModel?: string;
   /** Delegation harness (auto subagent-utilization steering). "off"/"false"
    *  disables hints and nudges. Default: on. */

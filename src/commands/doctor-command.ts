@@ -233,19 +233,19 @@ interface DoctorUIState {
 }
 
 function renderDoctorView(report: DoctorReport, state: DoctorUIState, theme: any): string[] {
-  const lines: string[] = [];
+  const content: string[] = [];
 
   // ── Header ───────────────────────────────────────────────────────────
   const scoreColor = report.score >= 80 ? "success" : report.score >= 50 ? "warning" : "error";
   const scoreBar = "█".repeat(Math.round(report.score / 10)) +
     "░".repeat(Math.max(0, 10 - Math.round(report.score / 10)));
 
-  lines.push(theme.fg("accent", theme.bold("🩺 Memory Health Audit")));
-  lines.push("");
-  lines.push(`  Score: ${theme.fg(scoreColor, theme.bold(`${report.score}%`))}  ${theme.fg(scoreColor, scoreBar)}`);
-  lines.push(`  Root: ${theme.fg("dim", report.memoryRoot ?? "(not found)")}`);
-  lines.push(`  Files: ${report.systemCount} system + ${report.learningCount} learnings`);
-  lines.push("");
+  content.push(theme.fg("accent", theme.bold("🩺 Memory Health Audit")));
+  content.push("");
+  content.push(`  Score: ${theme.fg(scoreColor, theme.bold(`${report.score}%`))}  ${theme.fg(scoreColor, scoreBar)}`);
+  content.push(`  Root: ${theme.fg("dim", report.memoryRoot ?? "(not found)")}`);
+  content.push(`  Files: ${report.systemCount} system + ${report.learningCount} learnings`);
+  content.push("");
 
   // ── Checks ───────────────────────────────────────────────────────────
   for (const check of report.checks) {
@@ -256,21 +256,26 @@ function renderDoctorView(report: DoctorReport, state: DoctorUIState, theme: any
       ? theme.fg("text", check.label)
       : theme.fg("error", check.label);
 
-    lines.push(`${icon} ${label} ${theme.fg("dim", `(-${check.deduction}%)`)}`);
-    lines.push(`   ${theme.fg("dim", check.detail)}`);
+    content.push(`${icon} ${label} ${theme.fg("dim", `(-${check.deduction}%)`)}`);
+    content.push(`   ${theme.fg("dim", check.detail)}`);
 
     if (!check.pass) {
-      lines.push(`   ${theme.fg("warning", "→")} ${theme.fg("dim", truncateToWidth(check.recommendation, state.width - 6))}`);
+      content.push(`   ${theme.fg("warning", "→")} ${theme.fg("dim", truncateToWidth(check.recommendation, state.width - 6))}`);
     }
-    lines.push("");
+    content.push("");
   }
 
-  // Fill remaining height
-  while (lines.length < state.height - 1) {
-    lines.push(theme.fg("dim", "~"));
+  // Scroll window: the caller reserves the last returned line for its own
+  // footer (overwrites it in place), so the viewport is height - 1 lines.
+  const viewportHeight = Math.max(1, state.height - 1);
+  const maxScroll = Math.max(0, content.length - viewportHeight);
+  state.scroll = Math.min(Math.max(0, state.scroll), maxScroll);
+  const visible = content.slice(state.scroll, state.scroll + viewportHeight);
+  while (visible.length < viewportHeight) {
+    visible.push(theme.fg("dim", "~"));
   }
 
-  return lines;
+  return visible;
 }
 
 // ── register ───────────────────────────────────────────────────────────────

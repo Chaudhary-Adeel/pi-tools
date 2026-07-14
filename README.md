@@ -59,7 +59,7 @@ sections below for how each works:
 | `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
 | `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
-| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked; `background: true` to start the batch and keep working instead of blocking; every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
+| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked; runs in the background by default so the main agent keeps working (pass `background: false` to block and wait instead); every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 | `memory_search` | Search across all memory files (system + learnings) for a query |
 
@@ -84,10 +84,10 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash` — p
 | `/subagents` | Inspect subagent runs: `/subagents` lists recent runs, `/subagents <runId>` shows a run's summary, `/subagents <runId> <n>` shows one subagent's full prompt + complete activity trace + result |
 | `/harness` | Delegation-harness stats: research calls, subagent fan-outs, delegation ratio, nudges sent |
 | `/heal` | Memory Health Engine: score, validate, and heal `.pi/memory` now (`/heal dry` to preview) |
-| `/cvm` | Context Virtual Memory stats: tokens saved, cache hit ratios, symbol index size, storage backend (`/cvm index` forces a reindex) |
+| `/cvm` | Context Virtual Memory stats: tokens saved, cache hit ratios, symbol index size, storage backend (`/cvm index` forces a reindex, `/cvm gc` reclaims stale cache entries) |
 | `/skill:browser` | Loads browser automation instructions into context |
 
-**Ctrl+O** — interactive subagent prompt editor (expand, edit, or cancel subagent tasks before execution).
+**Ctrl+O** — expand/collapse tool output and subagent results (see Quiet Output below).
 
 ### Memory System
 
@@ -158,7 +158,7 @@ Prompt rules alone don't make a model fan out — so pi-tools extends Pi's harne
 - **`/harness`** — live stats: research calls, fan-outs, delegation ratio, hints/nudges sent.
 - Disable with `/config autoDelegate off`. Subagent processes are excluded automatically (they can't spawn).
 
-**Subagent observability & non-blocking runs.** The live activity widget only ever shows each subagent's *latest* action and disappears after the run. Every run now persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` also accepts `background: true` — mirroring `/newTask`'s background mode but for a whole parallel batch — which starts the fan-out and returns immediately instead of blocking the calling turn, so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes.
+**Subagent observability & non-blocking runs.** The live activity widget shows each subagent's *latest* action while it runs. Every run persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` runs in the background by default — mirroring `/newTask`'s background mode but for a whole parallel batch — starting the fan-out and returning immediately so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes. Pass `background: false` to block the calling turn and wait for all results instead.
 
 ### Smart Prompting
 
@@ -283,8 +283,7 @@ pi-tools/
         ├── memory.ts            # memory_map
         ├── memory-search.ts     # memory_search
         ├── browser.ts           # 7 CDP browser tools
-        ├── builtins.ts          # compact edit/write output
-        └── subagent-review.ts   # Ctrl+O prompt editor
+        └── builtins.ts          # compact edit/write output
 ```
 
 ## Security

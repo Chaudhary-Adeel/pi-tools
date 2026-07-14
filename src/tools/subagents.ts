@@ -236,8 +236,16 @@ function runOne(options: RunOneOptions): Promise<SubResult> {
 
     proc.on("close", (code) => {
       if (buffer.trim()) processLine(buffer);
-      result.exitCode = code ?? 0;
-      if (wasAborted && result.exitCode === 0) result.exitCode = 130;
+      if (wasAborted) {
+        // We requested the kill (turn abort) — treat as a standard SIGTERM exit.
+        result.exitCode = 130;
+      } else if (code !== null) {
+        result.exitCode = code;
+      } else {
+        // code is null when the process was killed by a signal we did NOT
+        // request — don't silently report that as success.
+        result.exitCode = 1;
+      }
       resolve(result);
     });
 
@@ -366,6 +374,32 @@ function formatResultsBody(results: SubResult[]): string {
     .join("\n\n---\n\n");
 }
 
+/** Write each subagent's result to its own temp file instead of returning
+ *  the full text inline — shared by both the blocking and background paths
+ *  so `output_to_files: true` behaves the same regardless of `background`. */
+async function writeResultsToFiles(
+  results: SubResult[],
+): Promise<{ tmpDir: string; filePaths: string[]; refSummary: string }> {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
+  const filePaths: string[] = [];
+  for (const r of results) {
+    const fname = `subagent-${r.index + 1}-result.md`;
+    const fp = path.join(tmpDir, fname);
+    const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
+    const content = `# Subagent ${r.index + 1} [${r.id}]  ${status}\n\n**Task:** ${r.prompt}\n\n**Result:**\n${r.output || r.stderr || "(no output)"}`;
+    await fs.promises.writeFile(fp, content, "utf-8");
+    filePaths.push(fp);
+  }
+  const refSummary = results
+    .map((r, i) => {
+      const status = r.exitCode === 0 ? "✓" : `✗`;
+      const preview = (r.output || r.stderr || "").slice(0, 120);
+      return `${status} **Subagent ${r.index + 1} [${r.id}]:** ${r.prompt.slice(0, 80)}… → \`${filePaths[i]}\`\n> ${preview}…`;
+    })
+    .join("\n\n");
+  return { tmpDir, filePaths, refSummary };
+}
+
 // ── live widget (shared by blocking and background paths) ──────────────────
 //
 // Keyed per-run (`subagents:<runId>`) rather than a single shared key, so a
@@ -446,14 +480,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "recorded to a full trace you can inspect with /subagents or by " +
       "reading its file directly. Each completed subagent is reported with " +
       "a stable id (e.g. sub-2-4fd1). Subagents may run on a lighter model " +
-      "(configured via /config) and cannot spawn subagents themselves. Set " +
-      "background: true to start the batch and keep working yourself " +
-      "instead of blocking this turn until every subagent finishes.",
+      "(configured via /config) and cannot spawn subagents themselves. " +
+      "Runs in the background by default: the call returns immediately with " +
+      "an acknowledgement and you keep working while the batch finishes; " +
+      "set background: false to block this turn until every subagent " +
+      "finishes instead.",
     promptSnippet: "delegate independent subtasks to parallel subagents",
     promptGuidelines: [
       "Give each subagent a self-contained prompt: it cannot see this conversation, so include every fact, path, and constraint it needs.",
       "When subagent results would be large (extensive code, long reports), set output_to_files: true to write results to temp files instead of bloating the main context window. Read files with Pi's built-in read tool when you need the full output.",
-      "For a substantial fan-out (3+ subagents, or work likely to take a while), set background: true and keep making progress yourself — implement the parts that don't depend on the subagents' findings, or continue other work — instead of sitting idle on a blocking call. You'll be notified when the batch completes.",
+      "Background is the default: the call returns right away and you should keep making progress yourself — implement the parts that don't depend on the subagents' findings, or continue other work — instead of sitting idle. You'll be notified when the batch completes. Only pass background: false when you genuinely need the results before you can take another step.",
       "If you need to see exactly what a subagent did (not just its final answer), use /subagents <runId> or read the trace file mentioned in the result.",
     ],
     parameters: Type.Object({
@@ -491,11 +527,12 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       background: Type.Optional(
         Type.Boolean({
           description:
-            "If true, start the batch and return immediately instead of " +
-            "blocking until every subagent finishes — you can keep working " +
-            "in the meantime. Tracked via the tasks tool; you'll get a " +
-            "notification (and a message in this conversation) when the " +
-            "whole batch completes. Default: false (wait for all results).",
+            "Default true: start the batch and return immediately instead " +
+            "of blocking until every subagent finishes — you can keep " +
+            "working in the meantime. Tracked via the tasks tool; you'll " +
+            "get a notification (and a message in this conversation) when " +
+            "the whole batch completes. Pass false to block this turn and " +
+            "wait for all results instead.",
         }),
       ),
     }),
@@ -513,8 +550,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const traceDir = runDir(ctx.cwd, runId);
       const batchLabel = tasks[0]!.prompt.split("\n")[0]!.slice(0, 60) + (total > 1 ? ` (+${total - 1} more)` : "");
 
+      const useBackground = params.background !== false;
       writeManifest(ctx.cwd, {
-        runId, startedAt, background: !!params.background,
+        runId, startedAt, background: useBackground,
         total, completed: 0, label: batchLabel,
       });
       const traces = initTraces(ctx.cwd, runId, tasks, ids, model);
@@ -540,15 +578,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         writeSubagentTrace(ctx.cwd, runId, finished);
       };
 
-      // ── background: acknowledge now, run + report later ──
-      if (params.background) {
+      // ── background (default): acknowledge now, run + report later ──
+      if (useBackground) {
         return runInBackground(pi, ctx, {
           tasks, ids, runId, startedAt, traceDir, batchLabel, concurrency, model, total, label,
+          outputToFiles: !!params.output_to_files,
           onActivity, onSubagentDone,
         });
       }
 
-      // ── blocking (default): show live status, wait for everything ──
+      // ── blocking (background: false): show live status, wait for everything ──
       const modelNote = model ? ` (model: ${model})` : "";
       ctx.ui.notify(`🚀 Spawning ${total} ${label}${modelNote}…`, "info");
       ctx.ui.setStatus(runId, `${total} ${label} running…`);
@@ -604,23 +643,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         addSubagentUsage(agg);
 
         if (params.output_to_files) {
-          const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
-          const filePaths: string[] = [];
-          for (const r of results) {
-            const fname = `subagent-${r.index + 1}-result.md`;
-            const fp = path.join(tmpDir, fname);
-            const status = r.exitCode === 0 ? "✓" : `✗ (exit ${r.exitCode})`;
-            const content = `# Subagent ${r.index + 1} [${r.id}]  ${status}\n\n**Task:** ${r.prompt}\n\n**Result:**\n${r.output || r.stderr || "(no output)"}`;
-            await fs.promises.writeFile(fp, content, "utf-8");
-            filePaths.push(fp);
-          }
-          const refSummary = results
-            .map((r, i) => {
-              const status = r.exitCode === 0 ? "✓" : `✗`;
-              const preview = (r.output || r.stderr || "").slice(0, 120);
-              return `${status} **Subagent ${r.index + 1} [${r.id}]:** ${r.prompt.slice(0, 80)}… → \`${filePaths[i]}\`\n> ${preview}…`;
-            })
-            .join("\n\n");
+          const { tmpDir, filePaths, refSummary } = await writeResultsToFiles(results);
 
           return text(
             `Subagent results written to ${tmpDir}/\n\n${refSummary}${traceNote}\n\nUse Pi's \`read\` tool to load full results.`,
@@ -732,6 +755,7 @@ interface BackgroundOptions {
   model?: string;
   total: number;
   label: string;
+  outputToFiles: boolean;
   onActivity: (activity: SubActivity) => void;
   onSubagentDone: (result: SubResult) => void;
 }
@@ -744,7 +768,7 @@ function runInBackground(
   ctx: ExtensionContext,
   opts: BackgroundOptions,
 ): ReturnType<typeof text> {
-  const { tasks, ids, runId, startedAt, traceDir, batchLabel, concurrency, model, total, label, onActivity, onSubagentDone } = opts;
+  const { tasks, ids, runId, startedAt, traceDir, batchLabel, concurrency, model, total, label, outputToFiles, onActivity, onSubagentDone } = opts;
 
   const taskEntries = addTasks(
     ctx.cwd,
@@ -800,10 +824,21 @@ function runInBackground(
       const idList = results.map((r) => r.id).join(", ");
       ctx.ui.setStatus(runId, undefined);
       setTimeout(() => ctx.ui.setWidget(widgetKey(runId), undefined), 2000);
+
+      let content: string;
+      let extraDetails: Record<string, unknown> = {};
+      if (outputToFiles) {
+        const { tmpDir, refSummary } = await writeResultsToFiles(results);
+        content = `## Background subagents ${icon} [${runId}]\n\nResults written to ${tmpDir}/\n\n${refSummary}\n\nFull traces: ${traceDir}/\n\nUse Pi's \`read\` tool to load full results.`;
+        extraDetails = { outputDir: tmpDir };
+      } else {
+        content = `## Background subagents ${icon} [${runId}]\n\n${truncate(formatResultsBody(results), 40_000)}\n\nFull traces: ${traceDir}/`;
+      }
+
       pi.sendMessage(
         {
           customType: "pi-tools:subagents-background-result",
-          content: `## Background subagents ${icon} [${runId}]\n\n${truncate(formatResultsBody(results), 40_000)}\n\nFull traces: ${traceDir}/`,
+          content,
           display: true,
           details: {
             runId,
@@ -812,6 +847,7 @@ function runInBackground(
             count: results.length,
             successCount: results.filter((r) => r.exitCode === 0).length,
             traceDir,
+            ...extraDetails,
           },
         },
       );

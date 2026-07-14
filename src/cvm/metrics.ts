@@ -11,7 +11,6 @@ export interface LayerStats {
 
 export interface CVMMetrics {
   hot: LayerStats;
-  warm: LayerStats;
   http: LayerStats & { notModified: number; bytesSaved: number };
   delta: { unchangedReturns: number; diffReturns: number; fullReturns: number };
   symbols: { filesParsed: number; filesReused: number; lookups: number };
@@ -23,7 +22,6 @@ export interface CVMMetrics {
 function emptyMetrics(): CVMMetrics {
   return {
     hot: { hits: 0, misses: 0 },
-    warm: { hits: 0, misses: 0 },
     http: { hits: 0, misses: 0, notModified: 0, bytesSaved: 0 },
     delta: { unchangedReturns: 0, diffReturns: 0, fullReturns: 0 },
     symbols: { filesParsed: 0, filesReused: 0, lookups: 0 },
@@ -65,12 +63,11 @@ export function formatCvmMetrics(): string {
     "CVM metrics (this session):",
     `  est. prompt tokens saved: ${m.tokensSaved.toLocaleString()}`,
     `  hot cache hit ratio:      ${ratio(m.hot)}`,
-    `  warm store hit ratio:     ${ratio(m.warm)}`,
     `  http cache:               ${ratio(m.http)}, ${m.http.notModified} conditional 304s, ` +
       `${(m.http.bytesSaved / 1024).toFixed(1)} KB not re-downloaded`,
     `  delta mode:               ${m.delta.unchangedReturns} unchanged stubs, ` +
       `${m.delta.diffReturns} diffs, ${m.delta.fullReturns} full reads`,
-    `  symbol index:             ${m.symbols.filesReused} files reused, ` +
+    `  symbol index (warm):      ${m.symbols.filesReused} files reused, ` +
       `${m.symbols.filesParsed} parsed, ${m.symbols.lookups} lookups`,
     `  context resolves:         ${m.context.resolves} (${m.context.expansions} auto-expansions, ` +
       `avg confidence ${(m.context.avgConfidence * 100).toFixed(0)}%)`,
