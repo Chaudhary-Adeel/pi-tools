@@ -59,7 +59,7 @@ sections below for how each works:
 | `github_explore` | Search code/repos and read files on GitHub (REST API; `GITHUB_TOKEN` optional) |
 | `tasks` | Persistent structured task list (`.pi/tasks.json`) — add/update/list; open tasks re-injected each session |
 | `ask_user` | Ask the human a blocking question (free-text or choices) |
-| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked; `background: true` to start the batch and keep working instead of blocking; every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
+| `spawn_subagents` | Run independent subtasks in parallel `pi` subprocesses (isolated context); each result carries a stable id (`sub-2-4fd1`); optional lighter model; nesting blocked; runs in the background by default so the main agent keeps working (pass `background: false` to block and wait instead); every subagent's full prompt + complete tool-by-tool activity trace is persisted and inspectable via `/subagents` |
 | `memory_map` | Inspect agent memory footprint, check token budget, regenerate memory-map.md |
 | `memory_search` | Search across all memory files (system + learnings) for a query |
 

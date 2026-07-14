@@ -4,7 +4,7 @@
 // prompt. Loaded by Pi via the `pi.extensions` field in package.json.
 //
 // Also sets a custom footer showing the configured greeting name (see /config).
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
@@ -179,6 +179,10 @@ export default function (pi: ExtensionAPI): void {
       // Match 'git commit' but NOT 'git -c' (already configured)
       if (GIT_COMMIT_RE.test(cmd) && !/git\s+-c\s+user\.name/.test(cmd)) {
         const git = getGitIdentity(ctx.cwd);
+        // Single-quote syntax is safe here on every OS: Pi's bash tool
+        // always resolves to a bash/sh-compatible shell (Git Bash on
+        // Windows, /bin/bash or sh elsewhere) — it never falls back to
+        // cmd.exe or PowerShell, so this never needs OS branching.
         event.input.command = cmd.replace(
           GIT_COMMIT_RE,
           `git -c user.name='${git.name}' -c user.email='${git.email}' commit`,
@@ -211,16 +215,23 @@ export default function (pi: ExtensionAPI): void {
     if (!memoryModified) return;
     memoryModified = false;
     try {
-      // git diff --quiet exits 0 if no changes, 1 if there ARE changes
-      execSync("git diff --quiet .pi/memory/", { cwd: ctx.cwd });
+      // git diff --quiet exits 0 if no changes, 1 if there ARE changes.
+      // execFileSync passes argv directly (no shell), so this runs the same
+      // way on every OS instead of relying on a POSIX-flavored command string.
+      execFileSync("git", ["diff", "--quiet", ".pi/memory/"], { cwd: ctx.cwd });
       return; // no changes
     } catch {
       // changes exist — stage and commit
       try {
         const git = getGitIdentity(ctx.cwd);
-        execSync("git add .pi/memory/", { cwd: ctx.cwd });
-        execSync(
-          `git -c user.name='${git.name}' -c user.email='${git.email}' commit -m 'chore(memory): update project memory files'`,
+        execFileSync("git", ["add", ".pi/memory/"], { cwd: ctx.cwd });
+        execFileSync(
+          "git",
+          [
+            "-c", `user.name=${git.name}`,
+            "-c", `user.email=${git.email}`,
+            "commit", "-m", "chore(memory): update project memory files",
+          ],
           { cwd: ctx.cwd },
         );
       } catch {

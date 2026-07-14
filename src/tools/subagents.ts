@@ -446,14 +446,16 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "recorded to a full trace you can inspect with /subagents or by " +
       "reading its file directly. Each completed subagent is reported with " +
       "a stable id (e.g. sub-2-4fd1). Subagents may run on a lighter model " +
-      "(configured via /config) and cannot spawn subagents themselves. Set " +
-      "background: true to start the batch and keep working yourself " +
-      "instead of blocking this turn until every subagent finishes.",
+      "(configured via /config) and cannot spawn subagents themselves. " +
+      "Runs in the background by default: the call returns immediately with " +
+      "an acknowledgement and you keep working while the batch finishes; " +
+      "set background: false to block this turn until every subagent " +
+      "finishes instead.",
     promptSnippet: "delegate independent subtasks to parallel subagents",
     promptGuidelines: [
       "Give each subagent a self-contained prompt: it cannot see this conversation, so include every fact, path, and constraint it needs.",
       "When subagent results would be large (extensive code, long reports), set output_to_files: true to write results to temp files instead of bloating the main context window. Read files with Pi's built-in read tool when you need the full output.",
-      "For a substantial fan-out (3+ subagents, or work likely to take a while), set background: true and keep making progress yourself — implement the parts that don't depend on the subagents' findings, or continue other work — instead of sitting idle on a blocking call. You'll be notified when the batch completes.",
+      "Background is the default: the call returns right away and you should keep making progress yourself — implement the parts that don't depend on the subagents' findings, or continue other work — instead of sitting idle. You'll be notified when the batch completes. Only pass background: false when you genuinely need the results before you can take another step.",
       "If you need to see exactly what a subagent did (not just its final answer), use /subagents <runId> or read the trace file mentioned in the result.",
     ],
     parameters: Type.Object({
@@ -491,11 +493,12 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       background: Type.Optional(
         Type.Boolean({
           description:
-            "If true, start the batch and return immediately instead of " +
-            "blocking until every subagent finishes — you can keep working " +
-            "in the meantime. Tracked via the tasks tool; you'll get a " +
-            "notification (and a message in this conversation) when the " +
-            "whole batch completes. Default: false (wait for all results).",
+            "Default true: start the batch and return immediately instead " +
+            "of blocking until every subagent finishes — you can keep " +
+            "working in the meantime. Tracked via the tasks tool; you'll " +
+            "get a notification (and a message in this conversation) when " +
+            "the whole batch completes. Pass false to block this turn and " +
+            "wait for all results instead.",
         }),
       ),
     }),
@@ -513,8 +516,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       const traceDir = runDir(ctx.cwd, runId);
       const batchLabel = tasks[0]!.prompt.split("\n")[0]!.slice(0, 60) + (total > 1 ? ` (+${total - 1} more)` : "");
 
+      const useBackground = params.background !== false;
       writeManifest(ctx.cwd, {
-        runId, startedAt, background: !!params.background,
+        runId, startedAt, background: useBackground,
         total, completed: 0, label: batchLabel,
       });
       const traces = initTraces(ctx.cwd, runId, tasks, ids, model);
@@ -540,15 +544,15 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
         writeSubagentTrace(ctx.cwd, runId, finished);
       };
 
-      // ── background: acknowledge now, run + report later ──
-      if (params.background) {
+      // ── background (default): acknowledge now, run + report later ──
+      if (useBackground) {
         return runInBackground(pi, ctx, {
           tasks, ids, runId, startedAt, traceDir, batchLabel, concurrency, model, total, label,
           onActivity, onSubagentDone,
         });
       }
 
-      // ── blocking (default): show live status, wait for everything ──
+      // ── blocking (background: false): show live status, wait for everything ──
       const modelNote = model ? ` (model: ${model})` : "";
       ctx.ui.notify(`🚀 Spawning ${total} ${label}${modelNote}…`, "info");
       ctx.ui.setStatus(runId, `${total} ${label} running…`);
