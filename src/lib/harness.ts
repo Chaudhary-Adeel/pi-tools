@@ -1,9 +1,11 @@
-// Delegation harness — makes subagent auto-utilization actually happen.
+// Behavioral harness — makes the operating-prompt principles actually happen,
+// instead of relying on a weaker model reading and remembering them.
 //
-// Prompt rules alone don't reliably trigger fan-outs: the model reads them
-// once at session start and then falls into serial read/grep loops. This
-// module extends Pi's harness with live steering at the three moments where
-// delegation pays:
+// Prompt rules alone don't reliably change behavior: the model reads them
+// once at session start and then falls into whatever pattern the underlying
+// model defaults to (serial research loops, declaring victory without
+// verifying). This module extends Pi's harness with live steering, driven
+// by real tool-call signals rather than hoping the prompt was followed:
 //
 //   1. Prompt shape  — a decomposable request (lists, multi-part asks,
 //      repo-wide sweeps) gets a parallelization hint injected into THAT
@@ -14,8 +16,11 @@
 //   3. Context pressure — when the context window fills past a threshold
 //      and the loop is still doing primary research, a nudge suggests
 //      delegating the remaining reading with output_to_files.
+//   4. Unverified changes — files were edited/written this loop but no
+//      build/test/verification command ran afterward; nudged once at turn
+//      end so "done" claims aren't taken on faith.
 //
-// Heuristics and the tracker are pure and unit-tested; the event wiring in
+// Heuristics and the trackers are pure and unit-tested; the event wiring in
 // harness-register.ts is thin. Nudges are rate-limited so they inform
 // rather than nag, and everything can be disabled with /config autoDelegate off.
 
@@ -219,6 +224,82 @@ export class DelegationTracker {
       "",
       `Thresholds: streak ≥ ${this.thresholds.streak} research calls/loop, ` +
         `context ≥ ${this.thresholds.contextPercent}%. Disable with /config autoDelegate off.`,
+    ].join("\n");
+  }
+}
+
+// ── verification tracker ────────────────────────────────────────────────────
+//
+// Catches the single most common way a weaker model fakes "done": editing
+// files and then declaring success without ever running a build, test, or
+// exercising the change. edit/write are the mutation signal; a bash command
+// that looks like a build/test/lint/typecheck invocation clears it.
+
+const MUTATING_TOOLS: ReadonlySet<string> = new Set(["edit", "write"]);
+
+const VERIFY_CMD_RE =
+  /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|build|lint|typecheck|check)\b|\btsc\b|\bpytest\b|\bgo\s+(test|build|vet)\b|\bcargo\s+(test|build|check)\b|\bmake\s+(test|build|check)\b|\b(jest|vitest|rspec)\b|\bmvn\s+test\b|\bdotnet\s+test\b/i;
+
+/** True if a bash command looks like it's verifying the codebase (build,
+ *  test, lint, typecheck) rather than just making another edit. */
+export function looksLikeVerification(command: string): boolean {
+  return VERIFY_CMD_RE.test(command);
+}
+
+export interface VerificationStats {
+  loops: number;
+  mutations: number;
+  verifications: number;
+  nudges: number;
+}
+
+/** Tracks whether file changes in the current loop were followed by a
+ *  verification command, and nudges once at turn end if not. Pure state
+ *  machine — no Pi APIs — so it's directly unit-testable. */
+export class VerificationTracker {
+  private unverifiedMutation = false;
+  private nudgedThisLoop = false;
+  readonly stats: VerificationStats = { loops: 0, mutations: 0, verifications: 0, nudges: 0 };
+
+  /** Call on agent_start — a new loop begins. */
+  beginLoop(): void {
+    this.stats.loops++;
+    this.unverifiedMutation = false;
+    this.nudgedThisLoop = false;
+  }
+
+  recordToolStart(toolName: string, command?: string): void {
+    if (MUTATING_TOOLS.has(toolName)) {
+      this.unverifiedMutation = true;
+      this.stats.mutations++;
+    } else if (toolName === "bash" && command && looksLikeVerification(command)) {
+      this.unverifiedMutation = false;
+      this.stats.verifications++;
+    }
+  }
+
+  /** At turn end: nudge once if files changed this loop with no
+   *  verification command afterward. */
+  maybeVerifyNudge(): string | undefined {
+    if (!this.unverifiedMutation || this.nudgedThisLoop) return undefined;
+    this.nudgedThisLoop = true;
+    this.stats.nudges++;
+    return (
+      "[pi-tools harness] Files were changed this turn with no build/test/verification " +
+      "command run afterward. Before treating this as done: run the relevant build or tests, " +
+      "or exercise the changed behavior directly — don't report success on an unverified change."
+    );
+  }
+
+  /** Human-readable stats block for /harness. */
+  formatStats(): string {
+    const s = this.stats;
+    return [
+      "Verification harness (this session):",
+      `  agent loops:        ${s.loops}`,
+      `  file mutations:     ${s.mutations} (edit/write calls)`,
+      `  verification runs:  ${s.verifications} (build/test/lint/typecheck commands)`,
+      `  unverified nudges:  ${s.nudges}`,
     ].join("\n");
   }
 }

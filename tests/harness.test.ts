@@ -6,8 +6,10 @@ import assert from "node:assert";
 import {
   DelegationTracker,
   DEFAULT_THRESHOLDS,
+  VerificationTracker,
   estimateSubtasks,
   isResearchTool,
+  looksLikeVerification,
   parallelizationHint,
 } from "../src/lib/harness.ts";
 
@@ -130,5 +132,87 @@ describe("stats", () => {
     const hint = parallelizationHint(5);
     assert.match(hint, /~5 independent subtasks/);
     assert.match(hint, /spawn_subagents/);
+  });
+});
+
+describe("looksLikeVerification", () => {
+  test("recognizes common build/test/lint/typecheck commands", () => {
+    assert.ok(looksLikeVerification("npm test"));
+    assert.ok(looksLikeVerification("npm run build"));
+    assert.ok(looksLikeVerification("npx tsc --noEmit"));
+    assert.ok(looksLikeVerification("pytest tests/"));
+    assert.ok(looksLikeVerification("go test ./..."));
+    assert.ok(looksLikeVerification("cargo test"));
+    assert.ok(looksLikeVerification("make test"));
+    assert.ok(looksLikeVerification("yarn lint"));
+  });
+
+  test("does not misclassify ordinary commands", () => {
+    assert.ok(!looksLikeVerification("ls -la"));
+    assert.ok(!looksLikeVerification("git status"));
+    assert.ok(!looksLikeVerification("cat package.json"));
+    assert.ok(!looksLikeVerification("npm install"));
+  });
+});
+
+describe("VerificationTracker", () => {
+  test("nudges once when files change with no verification run", () => {
+    const t = new VerificationTracker();
+    t.beginLoop();
+    t.recordToolStart("edit");
+    const nudge = t.maybeVerifyNudge();
+    assert.ok(nudge?.includes("verification"));
+    // Not repeated within the same loop.
+    assert.strictEqual(t.maybeVerifyNudge(), undefined);
+  });
+
+  test("does not nudge when a verification command ran after the edit", () => {
+    const t = new VerificationTracker();
+    t.beginLoop();
+    t.recordToolStart("write");
+    t.recordToolStart("bash", "npm test");
+    assert.strictEqual(t.maybeVerifyNudge(), undefined);
+  });
+
+  test("does not nudge when nothing was mutated", () => {
+    const t = new VerificationTracker();
+    t.beginLoop();
+    t.recordToolStart("read_file");
+    t.recordToolStart("grep_search");
+    assert.strictEqual(t.maybeVerifyNudge(), undefined);
+  });
+
+  test("re-flags if a new edit happens after a verification run", () => {
+    const t = new VerificationTracker();
+    t.beginLoop();
+    t.recordToolStart("edit");
+    t.recordToolStart("bash", "npm test");
+    assert.strictEqual(t.maybeVerifyNudge(), undefined, "verified — no nudge yet");
+    t.recordToolStart("edit"); // a further, unverified change
+    assert.ok(t.maybeVerifyNudge()?.includes("verification"));
+  });
+
+  test("resets per loop", () => {
+    const t = new VerificationTracker();
+    t.beginLoop();
+    t.recordToolStart("edit");
+    assert.ok(t.maybeVerifyNudge());
+    t.beginLoop();
+    assert.strictEqual(t.maybeVerifyNudge(), undefined, "fresh loop, nothing mutated yet");
+  });
+
+  test("stats accumulate across loops", () => {
+    const t = new VerificationTracker();
+    t.beginLoop();
+    t.recordToolStart("edit");
+    t.recordToolStart("bash", "npm test");
+    t.beginLoop();
+    t.recordToolStart("write");
+    t.maybeVerifyNudge();
+    const out = t.formatStats();
+    assert.match(out, /agent loops:\s+2/);
+    assert.match(out, /file mutations:\s+2/);
+    assert.match(out, /verification runs:\s+1/);
+    assert.match(out, /unverified nudges:\s+1/);
   });
 });

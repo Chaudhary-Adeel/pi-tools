@@ -835,6 +835,15 @@ function runInBackground(
         content = `## Background subagents ${icon} [${runId}]\n\n${truncate(formatResultsBody(results), 40_000)}\n\nFull traces: ${traceDir}/`;
       }
 
+      // triggerTurn: true matters here — this fires from a detached async
+      // callback that can land long after the calling turn ended (main
+      // agent idle, waiting at the prompt). Without it, sendMessage's
+      // default behavior when NOT streaming is to silently append to
+      // history with no new turn: the model would never actually see or
+      // act on the result until the user happened to send something else.
+      // When the main agent IS still streaming (doing other work), Pi's own
+      // isStreaming check takes priority and this steers in as before —
+      // triggerTurn is a no-op in that case, so it's always safe to pass.
       pi.sendMessage(
         {
           customType: "pi-tools:subagents-background-result",
@@ -850,12 +859,25 @@ function runInBackground(
             ...extraDetails,
           },
         },
+        { triggerTurn: true },
       );
       ctx.ui.notify(`${icon} background subagents completed (${idList})`, results.every((r) => r.exitCode === 0) ? "info" : "error");
     } catch (err) {
       ctx.ui.setStatus(runId, undefined);
       ctx.ui.setWidget(widgetKey(runId), undefined);
       for (const te of taskEntries) updateTask(ctx.cwd, te.id, { status: "pending", notes: `batch failed: ${(err as Error).message}` });
+      // Same reasoning as above: without triggerTurn, a batch failure while
+      // the main agent is idle would be silently lost to a toast the user
+      // might not see, with no chance for the agent to react/retry.
+      pi.sendMessage(
+        {
+          customType: "pi-tools:subagents-background-result",
+          content: `## Background subagents ✗ [${runId}]\n\nBatch failed to complete: ${(err as Error).message}`,
+          display: true,
+          details: { runId, failed: true },
+        },
+        { triggerTurn: true },
+      );
       ctx.ui.notify(`✗ background subagents [${runId}] failed: ${(err as Error).message}`, "error");
     }
   })();

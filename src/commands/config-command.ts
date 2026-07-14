@@ -29,7 +29,7 @@ const FIELDS: Field[] = [
   { key: "gitEmail", label: "Git email", hint: "user.email injected into git commits" },
   { key: "greetingName", label: "Greetings name", hint: "name shown in the footer" },
   { key: "subagentModel", label: "Subagent model", hint: "lighter model for spawn_subagents (empty = inherit)" },
-  { key: "autoDelegate", label: "Auto-delegate", hint: "delegation harness hints/nudges: on or off (default on)" },
+  { key: "autoDelegate", label: "Behavioral harness", hint: "delegation + unverified-change nudges: on or off (default on)" },
   { key: "memoryHealth", label: "Memory health", hint: "autonomous memory healing sweeps: on or off (default on)" },
   { key: "quietOutput", label: "Quiet output", hint: "compact oversized tool output before the model sees it: on or off (default on)" },
 ];

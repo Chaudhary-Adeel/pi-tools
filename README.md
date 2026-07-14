@@ -42,7 +42,7 @@ sections below for how each works:
 | [Context Virtual Memory (CVM)](#context-virtual-memory-cvm) | Symbol-level retrieval, delta mode, HTTP caching — the smallest complete context, never whole files |
 | [Quiet Output](#quiet-output) | Compacts oversized tool output (including Pi's built-ins) before it reaches the model |
 | [Memory Health Engine](#memory-health-engine) | Autonomously scores, validates, dedupes, and heals `.pi/memory` against the live codebase |
-| [Delegation Harness](#delegation-harness) | Actively steers the model toward subagent fan-out instead of serial research |
+| [Behavioral Harness](#behavioral-harness) | Actively steers the model toward subagent fan-out and rigorous self-verification, on any model |
 
 ### Agent Tools
 
@@ -82,7 +82,7 @@ For editing, writing, and shell: use Pi's built-in `edit`, `write`, `bash` — p
 | `/agents` | Show subagent setup: main/subagent model, nesting policy, presets (explorer, coder, reviewer, tester) |
 | `/newTask` | Run a task in a fresh subagent: `/newTask <prompt>` (standard) or `/newTask background <prompt>` (detached, logged to `.pi/newtask/`, tracked in tasks.json). Preset prefix: `/newTask reviewer: …` |
 | `/subagents` | Inspect subagent runs: `/subagents` lists recent runs, `/subagents <runId>` shows a run's summary, `/subagents <runId> <n>` shows one subagent's full prompt + complete activity trace + result |
-| `/harness` | Delegation-harness stats: research calls, subagent fan-outs, delegation ratio, nudges sent |
+| `/harness` | Behavioral-harness stats: research calls, subagent fan-outs, delegation ratio, file mutations vs. verification runs, nudges sent |
 | `/heal` | Memory Health Engine: score, validate, and heal `.pi/memory` now (`/heal dry` to preview) |
 | `/cvm` | Context Virtual Memory stats: tokens saved, cache hit ratios, symbol index size, storage backend (`/cvm index` forces a reindex, `/cvm gc` reclaims stale cache entries) |
 | `/skill:browser` | Loads browser automation instructions into context |
@@ -148,15 +148,16 @@ Keeps `.pi/memory/` accurate, minimal, and self-healing over time — autonomous
 
 Runs automatically in the background at session start (debounced to once per 6 hours) and immediately after any turn that edits `.pi/memory/`. `/heal` runs it on demand (`/heal dry` to preview without applying); `/config memoryHealth off` disables autonomous sweeps.
 
-### Delegation Harness
+### Behavioral Harness
 
-Prompt rules alone don't make a model fan out — so pi-tools extends Pi's harness with **active subagent-utilization steering**:
+Prompt rules alone don't reliably change behavior — the model reads them once and often falls back to whatever pattern the underlying model defaults to. pi-tools extends Pi's harness with **live steering driven by real tool-call signals**, on top of a model-agnostic operating prompt (`<agent_harness_standard>`, injected for every session and every subagent) that sets the target standard regardless of which model is actually running:
 
 - **Prompt-shape hints** — decomposable requests (lists, multi-part asks, repo-wide sweeps) get a `<parallelization_hint>` injected into that turn's system prompt, while the plan is still forming.
-- **Research-streak nudges** — 5+ sequential research calls (read/grep/glob/web/…) in one loop without a fan-out triggers a mid-stream steering nudge to break the remaining lookups into subagents. Rate-limited (once per loop, 3 per session).
-- **Context-pressure nudges** — past 60% context usage with research still running, the harness suggests delegating the rest with `output_to_files: true` (once per session).
-- **`/harness`** — live stats: research calls, fan-outs, delegation ratio, hints/nudges sent.
-- Disable with `/config autoDelegate off`. Subagent processes are excluded automatically (they can't spawn).
+- **Research-streak nudges** — 5+ sequential research calls (read/grep/glob/web/…) in one loop without a fan-out triggers a mid-stream steering nudge to break the remaining lookups into subagents. Rate-limited (once per loop, 3 per session). Main session only — subagents can't spawn subagents.
+- **Context-pressure nudges** — past 60% context usage with research still running, the harness suggests delegating the rest with `output_to_files: true` (once per session). Main session only.
+- **Unverified-change nudges** — files edited/written this turn with no build/test/lint/typecheck command run afterward triggers a turn-end reminder not to report success on an unverified change. Applies to the main session **and** every subagent — both make real edits and should be held to the same bar.
+- **`/harness`** — live stats: research calls, fan-outs, delegation ratio, file mutations vs. verification runs, nudges sent.
+- Disable everything with `/config autoDelegate off`.
 
 **Subagent observability & non-blocking runs.** The live activity widget shows each subagent's *latest* action while it runs. Every run persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` runs in the background by default — mirroring `/newTask`'s background mode but for a whole parallel batch — starting the fan-out and returning immediately so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes. Pass `background: false` to block the calling turn and wait for all results instead.
 
@@ -180,7 +181,7 @@ Git commits through Pi are signed with the configured git identity (default `ade
 - `gitName` / `gitEmail` — identity injected into `git commit` (default: `adeel.bot`)
 - `greetingName` — name shown in the footer (default: Muhammad Adeel Chaudhary)
 - `subagentModel` — lighter model for subagents and `/newTask` (default: inherit session model)
-- `autoDelegate` — delegation-harness hints/nudges, `on`/`off` (default: on)
+- `autoDelegate` — behavioral-harness hints/nudges (delegation + verification), `on`/`off` (default: on)
 - `memoryHealth` — autonomous memory-healing sweeps, `on`/`off` (default: on; `/heal` always works regardless)
 - `quietOutput` — compact oversized tool output before the model sees it (built-in tools included), `on`/`off` (default: on)
 
