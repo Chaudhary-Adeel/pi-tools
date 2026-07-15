@@ -20,7 +20,7 @@ export default function InputBar() {
 
   const send = async () => {
     const text = value.trim()
-    if (!text || isRunning || !projectPath) return
+    if (!text || isRunning || !projectPath || !window.electronAPI) return
     setValue('')
     addUserMessage(text)
     const result = await window.electronAPI.sendMessage(text)
@@ -29,7 +29,7 @@ export default function InputBar() {
     }
   }
 
-  const abort = () => window.electronAPI.abort()
+  const abort = () => window.electronAPI?.abort()
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

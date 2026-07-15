@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "Pi Tools Desktop — a polished GUI for the Pi coding agent",
   "main": "out/main/index.js",
-  "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

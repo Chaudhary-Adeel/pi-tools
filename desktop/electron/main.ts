@@ -1,8 +1,20 @@
 import { app, BrowserWindow, shell, ipcMain } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { registerIpcHandlers } from './ipc-handlers'
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+
+/** Resolve the preload bundle — electron-vite outputs .js (CJS) or .mjs (ESM).
+ *  We try both so the app starts regardless of the "type" field in package.json. */
+function resolvePreload(): string {
+  const base = join(__dirname, '../preload')
+  const js = join(base, 'index.js')
+  const mjs = join(base, 'index.mjs')
+  if (existsSync(js)) return js
+  if (existsSync(mjs)) return mjs
+  return js // electron-vite dev will create it before starting electron
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -14,7 +26,7 @@ function createWindow(): BrowserWindow {
     frame: false,
     backgroundColor: '#0d1117',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: resolvePreload(),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,

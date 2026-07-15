@@ -4,6 +4,7 @@ export default function WelcomeScreen() {
   const setProject = useStore((s) => s.setProject)
 
   const handleOpen = async () => {
+    if (!window.electronAPI) return
     const folder = await window.electronAPI.openFolder()
     if (folder) setProject(folder)
   }

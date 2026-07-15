@@ -23,7 +23,7 @@ export default function MemoryPanel() {
   const piStatus = useStore((s) => s.piStatus)
 
   const runCommand = (cmd: string) => {
-    if (piStatus !== 'idle') return
+    if (piStatus !== 'idle' || !window.electronAPI) return
     window.electronAPI.sendMessage(cmd)
   }
 

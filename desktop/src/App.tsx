@@ -21,18 +21,24 @@ export default function App() {
   const cleanupRef = useRef<(() => void)[]>([])
 
   useEffect(() => {
+    const api = window.electronAPI
+    if (!api) {
+      console.error('electronAPI not available — preload script may not have loaded.')
+      return
+    }
+
     // Check Pi is installed
-    window.electronAPI.checkPi().then(({ found }) => setPiFound(found))
+    api.checkPi().then(({ found }) => setPiFound(found))
 
     // Re-attach any previously open project
-    window.electronAPI.getProject().then((p) => {
+    api.getProject().then((p) => {
       if (p) setProject(p)
     })
 
     // Subscribe to IPC events
-    const offOutput = window.electronAPI.onPiOutput((ev) => appendEvent(ev))
-    const offStatus = window.electronAPI.onPiStatus((s) => setPiStatus(s))
-    const offMemory = window.electronAPI.onMemoryUpdate((m) => setMemory(m))
+    const offOutput = api.onPiOutput((ev) => appendEvent(ev))
+    const offStatus = api.onPiStatus((s) => setPiStatus(s))
+    const offMemory = api.onMemoryUpdate((m) => setMemory(m))
 
     cleanupRef.current = [offOutput, offStatus, offMemory]
     return () => cleanupRef.current.forEach((fn) => fn())

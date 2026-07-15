@@ -3,7 +3,7 @@ import { useStore } from '../../store/useStore'
 export default function CvmPanel() {
   const piStatus = useStore((s) => s.piStatus)
   const runCommand = (cmd: string) => {
-    if (piStatus !== 'idle') return
+    if (piStatus !== 'idle' || !window.electronAPI) return
     window.electronAPI.sendMessage(cmd)
   }
 

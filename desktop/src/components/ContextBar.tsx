@@ -11,6 +11,7 @@ export default function ContextBar() {
   const folderName = projectPath ? projectPath.split(/[\\/]/).pop() : null
 
   const handleOpenFolder = async () => {
+    if (!window.electronAPI) return
     const folder = await window.electronAPI.openFolder()
     if (folder) setProject(folder)
   }
