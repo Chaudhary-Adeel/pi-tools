@@ -530,6 +530,47 @@ code, pre {
   40%            { transform: scale(1.1); opacity: 1; }
 }
 
+/* ── Thinking Accordion ──────────────────────────────────────────────────── */
+.think-accordion {
+  margin: 6px 0;
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+
+.think-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 0;
+  transition: color var(--transition);
+}
+
+.think-header:hover { color: var(--text-muted); }
+
+.think-chevron {
+  font-size: 9px;
+  transition: transform var(--transition);
+}
+
+.think-chevron--open { transform: rotate(90deg); }
+
+.think-body {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+
 /* ── Input area ──────────────────────────────────────────────────────────── */
 .input-area {
   border-top: 1px solid var(--border);
