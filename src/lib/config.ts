@@ -42,7 +42,9 @@ export const CONFIG_DEFAULTS: Required<Pick<PiToolsConfig, "greetingName" | "git
 };
 
 export function globalConfigPath(): string {
-  return path.join(os.homedir(), ".pi", "pi-tools.json");
+  // PI_TOOLS_HOME overrides the base directory for global config (for tests)
+  const home = process.env.PI_TOOLS_HOME || os.homedir();
+  return path.join(home, ".pi", "pi-tools.json");
 }
 
 export function projectConfigPath(cwd: string): string {

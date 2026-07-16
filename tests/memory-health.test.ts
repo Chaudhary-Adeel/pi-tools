@@ -36,6 +36,8 @@ function writeSource(rel: string, content: string): void {
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-memhealth-"));
+  // Scope memory lookups to the temp dir to avoid finding global ~/.pi/memory
+  process.env.PI_MEMORY_SCOPE = tmpDir;
   ensureMemoryDirs(tmpDir);
   resetIndexDebounce(tmpDir);
 });
@@ -43,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   closeWarmStore(tmpDir);
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  delete process.env.PI_MEMORY_SCOPE;
 });
 
 // ── extraction ───────────────────────────────────────────────────────────────
@@ -136,10 +139,13 @@ describe("analyzeMemoryHealth", () => {
   test("no memory root → clean report, no actions", () => {
     const other = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nomemhealth-"));
     try {
+      // Scope to this fresh dir — no .pi/memory exists here
+      process.env.PI_MEMORY_SCOPE = other;
       const report = analyzeMemoryHealth(other);
       assert.strictEqual(report.memoryRoot, null);
       assert.deepStrictEqual(report.actions, []);
     } finally {
+      delete process.env.PI_MEMORY_SCOPE;
       fs.rmSync(other, { recursive: true, force: true });
     }
   });
@@ -303,8 +309,15 @@ describe("applyHealActions", () => {
 
 describe("formatHealthReport", () => {
   test("reports cleanly with no memory root", () => {
-    const report = analyzeMemoryHealth(fs.mkdtempSync(path.join(os.tmpdir(), "pi-fmt-")));
-    assert.match(formatHealthReport(report), /nothing to heal/);
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fmt-"));
+    try {
+      process.env.PI_MEMORY_SCOPE = other;
+      const report = analyzeMemoryHealth(other);
+      assert.match(formatHealthReport(report), /nothing to heal/);
+    } finally {
+      delete process.env.PI_MEMORY_SCOPE;
+      fs.rmSync(other, { recursive: true, force: true });
+    }
   });
 
   test("includes applied and skipped actions when provided", () => {

@@ -95,7 +95,7 @@ export async function findReferences(
     filesScanned++;
 
     const lines = content.split("\n");
-    const rel = path.relative(root, file) || file;
+    const rel = (path.relative(root, file) || file).replace(/\\/g, "/");
     for (let i = 0; i < lines.length; i++) {
       if (!wordRe.test(lines[i]!)) continue;
       if (refs.length >= maxRefs) {

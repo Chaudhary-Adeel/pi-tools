@@ -21,12 +21,15 @@ let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-tools-config-"));
+  // Isolate from global ~/.pi/pi-tools.json
+  process.env.PI_TOOLS_HOME = tmpDir;
   invalidateConfigCache();
   delete process.env.PI_SUBAGENT_MODEL;
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  delete process.env.PI_TOOLS_HOME;
   invalidateConfigCache();
   delete process.env.PI_SUBAGENT_MODEL;
 });
