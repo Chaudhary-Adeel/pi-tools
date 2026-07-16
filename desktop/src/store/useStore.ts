@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ParsedEvent, PiStatus, MemoryData } from '../../electron/preload'
+import type { ParsedEvent, PiStatus, MemoryData, SubagentRunInfo, CvmStats, ConnectorInfo } from '../../electron/preload'
 
 // ── Message model ────────────────────────────────────────────────────────────
 
@@ -9,6 +9,7 @@ export interface ToolCallSegment {
   type: 'tool-call'
   tool: string
   args: string
+  callId?: number
   status?: 'ok' | 'error'
   summary?: string
 }
@@ -51,14 +52,27 @@ interface AppState {
   setMemory: (m: MemoryData) => void
 
   // Sidebar tab
-  sidebarTab: 'memory' | 'subagents' | 'cvm' | 'config'
+  sidebarTab: 'memory' | 'subagents' | 'cvm' | 'config' | 'connectors' | 'tasks' | 'files' | 'git'
   setSidebarTab: (tab: AppState['sidebarTab']) => void
 
   // Active assistant message id (being built)
   activeAssistantId: string | null
+
+  // Subagent runs
+  subagentRuns: SubagentRunInfo[]
+  setSubagentRuns: (runs: SubagentRunInfo[]) => void
+
+  // CVM stats
+  cvmStats: CvmStats | null
+  setCvmStats: (stats: CvmStats | null) => void
+
+  // Connectors
+  connectors: ConnectorInfo[]
+  setConnectors: (connectors: ConnectorInfo[]) => void
 }
 
 let msgCounter = 0
+let toolCallCounter = 0
 const nextId = () => `msg-${++msgCounter}`
 
 export const useStore = create<AppState>((set, get) => ({
@@ -97,60 +111,45 @@ export const useStore = create<AppState>((set, get) => ({
     const { activeAssistantId, messages } = get()
     if (!activeAssistantId) return
 
+    // Only mutate the last message (active assistant) during streaming.
+    // Avoids O(n) map over all messages on every text/tool event.
+    const lastIdx = messages.length - 1
+    const m = messages[lastIdx]
+    if (!m || m.id !== activeAssistantId) return
+
+    const segs = [...m.segments]
+
+    if (event.kind === 'text' && event.text) {
+      const lastSeg = segs[segs.length - 1]
+      if (lastSeg?.type === 'text') {
+        segs[segs.length - 1] = { type: 'text', text: lastSeg.text + '\n' + event.text }
+      } else {
+        segs.push({ type: 'text', text: event.text })
+      }
+    } else if (event.kind === 'tool-call') {
+      const callId = ++toolCallCounter
+      segs.push({ type: 'tool-call', tool: event.tool ?? '', args: event.args ?? '', callId })
+    } else if (event.kind === 'tool-result') {
+      // Match the most recent pending tool-call (reverse scan).
+      // Sequential results match correctly; callId enables future out-of-order support.
+      for (let i = segs.length - 1; i >= 0; i--) {
+        const s = segs[i]
+        if (s.type === 'tool-call' && !(s as ToolCallSegment).status) {
+          segs[i] = { ...s, status: event.status, summary: event.summary } as ToolCallSegment
+          break
+        }
+      }
+    }
+    // 'done' and 'error' events don't modify segments — just clear active below.
+
     set({
-      messages: messages.map((m) => {
-        if (m.id !== activeAssistantId) return m
-
-        const segs = [...m.segments]
-
-        if (event.kind === 'text' && event.text) {
-          const last = segs[segs.length - 1]
-          if (last?.type === 'text') {
-            // Append to last text segment
-            return {
-              ...m,
-              segments: [...segs.slice(0, -1), { type: 'text', text: last.text + '\n' + event.text }],
-            }
-          }
-          return { ...m, segments: [...segs, { type: 'text', text: event.text }] }
-        }
-
-        if (event.kind === 'tool-call') {
-          return {
-            ...m,
-            segments: [
-              ...segs,
-              { type: 'tool-call', tool: event.tool ?? '', args: event.args ?? '' },
-            ],
-          }
-        }
-
-        if (event.kind === 'tool-result') {
-          // Update the last pending tool-call with its result
-          const lastCallIdx = [...segs].reverse().findIndex((s) => s.type === 'tool-call' && !(s as ToolCallSegment).status)
-          if (lastCallIdx !== -1) {
-            const realIdx = segs.length - 1 - lastCallIdx
-            const updated = [...segs]
-            updated[realIdx] = {
-              ...updated[realIdx],
-              status: event.status,
-              summary: event.summary,
-            } as ToolCallSegment
-            return { ...m, segments: updated }
-          }
-        }
-
-        if (event.kind === 'done') {
-          // Turn complete — clear active id
-          return m
-        }
-
-        return m
-      }),
+      messages: [...messages.slice(0, -1), { ...m, segments: segs }],
     })
 
     if (event.kind === 'done') {
       set({ activeAssistantId: null })
+      // Send native notification on turn completion
+      window.electronAPI?.notify('Pi Tools', 'Turn complete')
     }
   },
 
@@ -161,4 +160,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   sidebarTab: 'memory',
   setSidebarTab: (sidebarTab) => set({ sidebarTab }),
+
+  subagentRuns: [],
+  setSubagentRuns: (subagentRuns) => set({ subagentRuns }),
+
+  cvmStats: null,
+  setCvmStats: (cvmStats) => set({ cvmStats }),
+
+  connectors: [],
+  setConnectors: (connectors) => set({ connectors }),
 }))

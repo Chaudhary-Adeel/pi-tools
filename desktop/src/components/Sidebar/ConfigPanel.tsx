@@ -19,7 +19,7 @@ export default function ConfigPanel() {
 
   useEffect(() => {
     if (projectPath && window.electronAPI) {
-      window.electronAPI.getConfig().then((c) => setConfig(c as Config))
+      window.electronAPI.getConfig().then((c: Record<string, unknown>) => setConfig(c as Config))
     }
   }, [projectPath])
 
@@ -31,9 +31,7 @@ export default function ConfigPanel() {
   const save = async () => {
     if (!window.electronAPI) return
     setSaving(true)
-    for (const [key, value] of Object.entries(config)) {
-      await window.electronAPI.setConfig(key, value)
-    }
+    await window.electronAPI.setConfigAll(config as Record<string, unknown>)
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)

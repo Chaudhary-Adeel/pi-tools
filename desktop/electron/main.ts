@@ -1,9 +1,12 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage, Notification } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { registerIpcHandlers } from './ipc-handlers'
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
 
 /** Resolve the preload bundle — electron-vite outputs .js (CJS) or .mjs (ESM).
  *  We try both so the app starts regardless of the "type" field in package.json. */
@@ -57,11 +60,38 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   const win = createWindow()
+  mainWindow = win
   registerIpcHandlers(win)
+
+  // System tray
+  if (process.platform !== 'darwin') {
+    // Create a simple 16x16 tray icon from raw pixel data (π glyph)
+    const icon = nativeImage.createEmpty()
+    tray = new Tray(icon.resize({ width: 16, height: 16 }))
+    tray.setToolTip('Pi Tools')
+    const contextMenu = Menu.buildFromTemplate([
+      { label: 'Show', click: () => win.show() },
+      { label: 'Quit', click: () => { isQuitting = true; app.quit() } },
+    ])
+    tray.setContextMenu(contextMenu)
+    tray.on('click', () => win.show())
+
+    // Minimize to tray instead of closing
+    win.on('close', (event) => {
+      if (!isQuitting) {
+        event.preventDefault()
+        win.hide()
+      }
+    })
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  isQuitting = true
 })
 
 app.on('window-all-closed', () => {
@@ -76,3 +106,12 @@ ipcMain.on('window:maximize', () => {
   win.isMaximized() ? win.unmaximize() : win.maximize()
 })
 ipcMain.on('window:close', () => BrowserWindow.getFocusedWindow()?.close())
+
+// System tray notification
+ipcMain.handle('notify', (_event, title: string, body: string) => {
+  if (Notification.isSupported()) {
+    new Notification({ title, body }).show()
+    return true
+  }
+  return false
+})

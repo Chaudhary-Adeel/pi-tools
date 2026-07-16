@@ -1,4 +1,6 @@
 import { useStore } from '../../store/useStore'
+import { useState } from 'react'
+import MemoryFileEditor from '../MemoryFileEditor'
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`
@@ -21,6 +23,8 @@ const BUDGET = 4000 // default token budget
 export default function MemoryPanel() {
   const memory = useStore((s) => s.memory)
   const piStatus = useStore((s) => s.piStatus)
+  const projectPath = useStore((s) => s.projectPath)
+  const [editingFile, setEditingFile] = useState<{ path: string; name: string } | null>(null)
 
   const runCommand = (cmd: string) => {
     if (piStatus !== 'idle' || !window.electronAPI) return
@@ -83,7 +87,16 @@ export default function MemoryPanel() {
         ) : (
           <ul className="file-list">
             {memory.systemFiles.map((f) => (
-              <li key={f.path} className="file-item">
+              <li
+                key={f.path}
+                className="file-item"
+                style={{ cursor: 'pointer' }}
+                onClick={() => setEditingFile({
+                  path: (projectPath ?? '') + '/' + f.path,
+                  name: f.name,
+                })}
+                title="Click to edit"
+              >
                 <div className="file-name">{f.name}</div>
                 {f.description && <div className="file-desc">{f.description}</div>}
                 <div className="file-meta">{formatBytes(f.size)} · {formatAge(f.modified)}</div>
@@ -102,7 +115,16 @@ export default function MemoryPanel() {
         ) : (
           <ul className="file-list">
             {memory.learningFiles.map((f) => (
-              <li key={f.path} className="file-item">
+              <li
+                key={f.path}
+                className="file-item"
+                style={{ cursor: 'pointer' }}
+                onClick={() => setEditingFile({
+                  path: (projectPath ?? '') + '/' + f.path,
+                  name: f.name,
+                })}
+                title="Click to edit"
+              >
                 <div className="file-name">{f.name}</div>
                 {f.description && <div className="file-desc">{f.description}</div>}
                 <div className="file-meta">{formatBytes(f.size)} · {formatAge(f.modified)}</div>
@@ -117,6 +139,14 @@ export default function MemoryPanel() {
         <button className="btn-secondary btn-sm" onClick={() => runCommand('/doctor')} title="Memory health audit">/doctor</button>
         <button className="btn-secondary btn-sm" onClick={() => runCommand('/heal')} title="Heal memory">/heal</button>
       </div>
+
+      {editingFile && (
+        <MemoryFileEditor
+          filePath={editingFile.path}
+          fileName={editingFile.name}
+          onClose={() => setEditingFile(null)}
+        />
+      )}
     </div>
   )
 }

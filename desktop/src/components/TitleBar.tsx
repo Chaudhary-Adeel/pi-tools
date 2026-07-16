@@ -7,7 +7,6 @@ export default function TitleBar() {
         <span className="titlebar-logo">π</span>
         <span className="titlebar-name">Pi Tools</span>
       </div>
-      <div className="titlebar-drag" />
       <div className="titlebar-controls">
         <button
           className="wc-btn wc-minimize"

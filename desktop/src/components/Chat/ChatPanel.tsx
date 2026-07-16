@@ -18,11 +18,16 @@ export default function ChatPanel() {
     }
   }, [messages])
 
+  const scrollTickRef = useRef<number | null>(null)
   const handleScroll = () => {
-    const el = containerRef.current
-    if (!el) return
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    userScrolledUp.current = distFromBottom > 100
+    if (scrollTickRef.current) return
+    scrollTickRef.current = requestAnimationFrame(() => {
+      scrollTickRef.current = null
+      const el = containerRef.current
+      if (!el) return
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      userScrolledUp.current = distFromBottom > 100
+    })
   }
 
   const scrollToBottom = () => {

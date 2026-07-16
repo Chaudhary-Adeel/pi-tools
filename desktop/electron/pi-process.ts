@@ -9,9 +9,8 @@
 
 import { spawn, ChildProcess, execSync } from 'child_process'
 import { BrowserWindow } from 'electron'
-import { parseOutput, ParsedEvent } from './output-parser'
-
-export type PiStatus = 'idle' | 'thinking' | 'calling-tool' | 'error'
+import { PiOutputParser, ParsedEvent } from './output-parser'
+import { PiStatus } from './types'
 
 export interface PiProcessOptions {
   projectPath: string
@@ -19,7 +18,10 @@ export interface PiProcessOptions {
 }
 
 let currentProcess: ChildProcess | null = null
+let currentPid: number | null = null
 let currentStatus: PiStatus = 'idle'
+let killedByUser = false
+let currentGeneration = 0
 
 /** Find the `pi` binary — checks PATH. Returns null if not found. */
 export function findPiBinary(): string | null {
@@ -34,11 +36,11 @@ export function findPiBinary(): string | null {
 
 function setStatus(win: BrowserWindow, status: PiStatus): void {
   currentStatus = status
-  win.webContents.send('pi:status', status)
+  if (!win.isDestroyed()) win.webContents.send('pi:status', status)
 }
 
 function sendEvent(win: BrowserWindow, event: ParsedEvent): void {
-  win.webContents.send('pi:output', event)
+  if (!win.isDestroyed()) win.webContents.send('pi:output', event)
 }
 
 /** Run a single Pi turn in print mode. Returns a promise that resolves when done. */
@@ -67,6 +69,9 @@ export function runPiTurn(
     // Pass PI_TOOLS_DESKTOP=1 so extensions can detect the desktop context.
     const env = { ...process.env, PI_TOOLS_DESKTOP: '1' }
 
+    killedByUser = false
+    const gen = ++currentGeneration
+
     const proc = spawn(
       piBin,
       ['-p', '--no-session', prompt],
@@ -74,21 +79,23 @@ export function runPiTurn(
         cwd: opts.projectPath,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-        shell: false,
+        shell: process.platform === 'win32',
       },
     )
 
     currentProcess = proc
+    currentPid = proc.pid ?? null
 
     let buffer = ''
 
+    const parser = new PiOutputParser()
     const flushBuffer = (data: string) => {
       buffer += data
       // Process complete lines to avoid splitting ANSI codes mid-sequence
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
       for (const line of lines) {
-        const events = parseOutput(line)
+        const events = parser.parseOutput(line)
         for (const ev of events) {
           if (ev.kind === 'tool-call') setStatus(opts.win, 'calling-tool')
           else if (ev.kind === 'text') setStatus(opts.win, 'thinking')
@@ -105,16 +112,21 @@ export function runPiTurn(
     })
 
     proc.on('close', (code) => {
+      // Ignore stale handlers from a previous (already replaced) process
+      if (gen !== currentGeneration) return
       // Flush any remaining buffered data
       if (buffer.trim()) {
-        const events = parseOutput(buffer)
+        const events = parser.parseOutput(buffer)
         for (const ev of events) sendEvent(opts.win, ev)
         buffer = ''
       }
       currentProcess = null
+      currentPid = null
       setStatus(opts.win, 'idle')
       sendEvent(opts.win, { kind: 'done', exitCode: code ?? 0 })
-      if (code !== null && code !== 0 && code !== 130) {
+      // Don't reject if user aborted (SIGTERM=143 on Unix, 1 on Windows, or killedByUser flag)
+      const isAbort = killedByUser || code === 130 || code === 143
+      if (code !== null && code !== 0 && !isAbort) {
         reject(new Error(`Pi exited with code ${code}`))
       } else {
         resolve()
@@ -122,7 +134,10 @@ export function runPiTurn(
     })
 
     proc.on('error', (err) => {
+      // Ignore stale handlers from a previous (already replaced) process
+      if (gen !== currentGeneration) return
       currentProcess = null
+      currentPid = null
       setStatus(opts.win, 'error')
       sendEvent(opts.win, { kind: 'error', text: `Failed to start Pi: ${err.message}` })
       reject(err)
@@ -131,12 +146,34 @@ export function runPiTurn(
 }
 
 /** Kill the current Pi process (user-initiated abort). */
-export function killCurrentProcess(): void {
-  if (currentProcess) {
-    currentProcess.kill('SIGTERM')
-    currentProcess = null
-    currentStatus = 'idle'
+export function killCurrentProcess(): boolean {
+  if (!currentProcess) return false
+  killedByUser = true
+
+  if (process.platform === 'win32' && currentPid) {
+    // On Windows with shell:true, killing the shell orphans the child.
+    // Use taskkill /T to kill the whole process tree.
+    try {
+      execSync(`taskkill /F /T /PID ${currentPid}`, { stdio: 'ignore' })
+    } catch {
+      // taskkill may fail if process already exited — that's fine
+    }
+  } else {
+    // Unix: kill the process group so children die too
+    const pid = currentPid ?? currentProcess.pid
+    if (pid) {
+      try {
+        process.kill(-pid, 'SIGTERM')
+      } catch {
+        currentProcess.kill('SIGTERM')
+      }
+    }
   }
+
+  currentProcess = null
+  currentPid = null
+  currentStatus = 'idle'
+  return true
 }
 
 export function getCurrentStatus(): PiStatus {

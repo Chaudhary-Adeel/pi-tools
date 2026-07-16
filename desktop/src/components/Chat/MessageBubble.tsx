@@ -1,5 +1,7 @@
+import { useState, useEffect, useMemo } from 'react'
 import type { Message, TextSegment, ToolCallSegment } from '../../store/useStore'
 import ToolCallCard from './ToolCallCard'
+import MarkdownText from './MarkdownText'
 
 interface Props {
   message: Message
@@ -36,27 +38,29 @@ function TextBlock({ seg }: { seg: TextSegment }) {
   let text = seg.text
 
   while (text) {
-    const startMatch = text.indexOf('<think>')
-    if (startMatch === -1) {
+    const match = text.match(/<(think|thought)>/)
+    if (!match) {
       if (text.trim()) parts.push({ type: 'normal', content: text })
       break
     }
     
-    // Push everything before <think>
+    const startMatch = match.index!
+    const tag = match[1]
+    const openTag = `<${tag}>`
+    const closeTag = `</${tag}>`
+    
     if (startMatch > 0) {
       const pre = text.substring(0, startMatch)
       if (pre.trim()) parts.push({ type: 'normal', content: pre })
     }
     
-    const endMatch = text.indexOf('</think>', startMatch)
+    const endMatch = text.indexOf(closeTag, startMatch)
     if (endMatch === -1) {
-      // Streaming thinking block
-      parts.push({ type: 'think', content: text.substring(startMatch + 7), isStreaming: true })
+      parts.push({ type: 'think', content: text.substring(startMatch + openTag.length), isStreaming: true })
       break
     } else {
-      // Complete thinking block
-      parts.push({ type: 'think', content: text.substring(startMatch + 7, endMatch), isStreaming: false })
-      text = text.substring(endMatch + 8)
+      parts.push({ type: 'think', content: text.substring(startMatch + openTag.length, endMatch), isStreaming: false })
+      text = text.substring(endMatch + closeTag.length)
     }
   }
 
@@ -66,28 +70,12 @@ function TextBlock({ seg }: { seg: TextSegment }) {
         p.type === 'think' ? (
           <ThinkingAccordion key={i} content={p.content} isStreaming={p.isStreaming} />
         ) : (
-          <NormalText key={i} content={p.content} />
+          <MarkdownText key={i} content={p.content} />
         )
       )}
     </>
   )
 }
-
-function NormalText({ content }: { content: string }) {
-  const lines = content.trim().split('\n')
-  const isCode = lines.length > 1 && (
-    lines.some((l) => /^(```|    |\t)/.test(l)) ||
-    lines[0]?.startsWith('```')
-  )
-
-  if (isCode || content.includes('```')) {
-    return <pre className="msg-code"><code>{content}</code></pre>
-  }
-
-  return <p className="msg-text">{content}</p>
-}
-
-import { useState, useEffect } from 'react'
 
 function ThinkingAccordion({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
   const [isOpen, setIsOpen] = useState(true)

@@ -1,31 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-export type PiStatus = 'idle' | 'thinking' | 'calling-tool' | 'error'
-
-export interface ParsedEvent {
-  kind: 'text' | 'tool-call' | 'tool-result' | 'section' | 'stderr' | 'error' | 'done'
-  text?: string
-  tool?: string
-  args?: string
-  summary?: string
-  status?: 'ok' | 'error'
-  raw?: string
-  exitCode?: number
-}
-
-export interface MemoryFile {
-  name: string
-  path: string
-  description: string
-  size: number
-  modified: number
-}
-
-export interface MemoryData {
-  systemFiles: MemoryFile[]
-  learningFiles: MemoryFile[]
-  hasMemory: boolean
-}
+import type { PiStatus, ParsedEvent, MemoryFile, MemoryData, SubagentRunInfo, CvmStats, ConnectorInfo } from './types'
+export type { PiStatus, ParsedEvent, MemoryFile, MemoryData, SubagentRunInfo, CvmStats, ConnectorInfo }
 
 const api = {
   // Window controls
@@ -55,6 +31,56 @@ const api = {
     ipcRenderer.invoke('config:get', projectPath),
   setConfig: (key: string, value: unknown, projectPath?: string): Promise<{ ok?: boolean; error?: string }> =>
     ipcRenderer.invoke('config:set', key, value, projectPath),
+  setConfigAll: (config: Record<string, unknown>, projectPath?: string): Promise<{ ok?: boolean; error?: string }> =>
+    ipcRenderer.invoke('config:setAll', config, projectPath),
+
+  // Subagents
+  getSubagentRuns: (projectPath?: string): Promise<SubagentRunInfo[]> =>
+    ipcRenderer.invoke('subagents:list', projectPath),
+  getSubagentTrace: (runId: string, projectPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('subagents:trace', runId, projectPath),
+
+  // CVM
+  getCvmStats: (projectPath?: string): Promise<CvmStats | null> =>
+    ipcRenderer.invoke('cvm:stats', projectPath),
+
+  // Connectors
+  getConnectors: (): Promise<ConnectorInfo[]> =>
+    ipcRenderer.invoke('connectors:list'),
+
+  // Learn
+  triggerLearn: (projectPath?: string): Promise<{ ok?: boolean; error?: string }> =>
+    ipcRenderer.invoke('learn:trigger', projectPath),
+
+  // Tasks
+  readTasks: (projectPath?: string): Promise<unknown[]> =>
+    ipcRenderer.invoke('tasks:read', projectPath),
+  writeTasks: (tasks: unknown[], projectPath?: string): Promise<{ ok?: boolean; error?: string }> =>
+    ipcRenderer.invoke('tasks:write', tasks, projectPath),
+
+  // Git
+  gitDiff: (filePath: string, projectPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('git:diff', filePath, projectPath),
+  gitDiffStaged: (projectPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('git:diffStaged', projectPath),
+
+  // Browser
+  getBrowserUrl: (): Promise<string> =>
+    ipcRenderer.invoke('browser:getUrl'),
+
+  // Env
+  getEnvAll: (keys: string[]): Promise<Record<string, string | null>> =>
+    ipcRenderer.invoke('env:getAll', keys),
+
+  // Notifications
+  notify: (title: string, body: string): Promise<boolean> =>
+    ipcRenderer.invoke('notify', title, body),
+
+  // Serve
+  serveStart: (projectPath?: string): Promise<{ ok?: boolean; error?: string; url?: string }> =>
+    ipcRenderer.invoke('serve:start', projectPath),
+  serveStop: (): Promise<{ ok?: boolean }> =>
+    ipcRenderer.invoke('serve:stop'),
 
   // Event listeners — return cleanup functions
   onPiOutput: (cb: (event: ParsedEvent) => void) => {

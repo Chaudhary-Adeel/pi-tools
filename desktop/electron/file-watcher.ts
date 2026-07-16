@@ -1,31 +1,20 @@
 /**
  * File watcher — watches .pi/memory/ and .pi/subagents/ for changes and
- * pushes structured updates to the renderer. Uses Node.js built-in fs.watch.
+ * pushes structured updates to the renderer. Uses Node.js built-in fs.watch
+ * with a periodic polling fallback (30 s) for platform reliability.
  */
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { BrowserWindow } from 'electron'
-
-interface MemoryFile {
-  name: string
-  path: string
-  description: string
-  size: number
-  modified: number
-}
-
-interface MemoryData {
-  systemFiles: MemoryFile[]
-  learningFiles: MemoryFile[]
-  hasMemory: boolean
-}
+import { MemoryFile, MemoryData } from './types'
 
 const watchers = new Map<string, fs.FSWatcher>()
+const pollers = new Map<string, ReturnType<typeof setInterval>>()
 
-function readFrontmatterDescription(filePath: string): string {
+async function readFrontmatterDescription(filePath: string): Promise<string> {
   try {
-    const content = fs.readFileSync(filePath, 'utf8')
+    const content = await fs.promises.readFile(filePath, 'utf8')
     const match = /^---[\s\S]*?description:\s*["']?(.+?)["']?\s*\n[\s\S]*?---/m.exec(content)
     return match?.[1]?.trim() ?? ''
   } catch {
@@ -33,32 +22,50 @@ function readFrontmatterDescription(filePath: string): string {
   }
 }
 
-function readMemoryDir(dir: string, relative: string): MemoryFile[] {
-  if (!fs.existsSync(dir)) return []
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith('.md') && f !== 'memory-map.md')
-    .map((f) => {
+async function readMemoryDir(dir: string, relative: string): Promise<MemoryFile[]> {
+  try {
+    await fs.promises.access(dir)
+    const entries = await fs.promises.readdir(dir)
+    const files: MemoryFile[] = []
+    for (const f of entries) {
+      if (!f.endsWith('.md') || f === 'memory-map.md') continue
       const fp = path.join(dir, f)
-      const st = fs.statSync(fp)
-      return {
-        name: f.replace(/\.md$/, ''),
-        path: path.join(relative, f),
-        description: readFrontmatterDescription(fp),
-        size: st.size,
-        modified: st.mtimeMs,
+      try {
+        const st = await fs.promises.stat(fp)
+        files.push({
+          name: f.replace(/\.md$/, ''),
+          path: path.join(relative, f),
+          description: await readFrontmatterDescription(fp),
+          size: st.size,
+          modified: st.mtimeMs,
+        })
+      } catch {
+        // file may have been deleted between readdir and stat — skip
       }
-    })
-    .sort((a, b) => b.modified - a.modified)
+    }
+    return files.sort((a, b) => b.modified - a.modified)
+  } catch {
+    return []
+  }
 }
 
-function readMemory(projectPath: string): MemoryData {
+async function readMemory(projectPath: string): Promise<MemoryData> {
   const memRoot = path.join(projectPath, '.pi', 'memory')
-  const hasMemory = fs.existsSync(memRoot)
+  let hasMemory = false
+  try {
+    await fs.promises.access(memRoot)
+    hasMemory = true
+  } catch {
+    hasMemory = false
+  }
   return {
     hasMemory,
-    systemFiles: readMemoryDir(path.join(memRoot, 'system'), '.pi/memory/system'),
-    learningFiles: readMemoryDir(path.join(memRoot, 'learnings'), '.pi/memory/learnings'),
+    systemFiles: hasMemory
+      ? await readMemoryDir(path.join(memRoot, 'system'), '.pi/memory/system')
+      : [],
+    learningFiles: hasMemory
+      ? await readMemoryDir(path.join(memRoot, 'learnings'), '.pi/memory/learnings')
+      : [],
   }
 }
 
@@ -73,28 +80,58 @@ export function startFileWatcher(projectPath: string, win: BrowserWindow): void 
 
   const pushUpdate = () => {
     if (debounce) clearTimeout(debounce)
-    debounce = setTimeout(() => {
+    debounce = setTimeout(async () => {
       if (!win.isDestroyed()) {
-        win.webContents.send('memory:update', readMemory(projectPath))
+        win.webContents.send('memory:update', await readMemory(projectPath))
       }
     }, 300)
   }
 
-  // Watch recursively — Node 20+ supports recursive on all platforms
+  // Watch recursively — Node 20+ supports recursive on all platforms.
   const watcher = fs.watch(
     piDir,
-    { recursive: true, persistent: false },
+    { recursive: true, persistent: true },
     (event, filename) => {
-      if (filename?.includes('memory') || filename?.includes('subagents')) {
+      // Match changes inside memory/ or subagents/ trees, plus new directory creation.
+      if (
+        filename?.includes('memory') ||
+        filename?.includes('subagents') ||
+        event === 'rename'
+      ) {
         pushUpdate()
       }
     },
   )
 
+  watcher.on('error', (err) => {
+    console.error('[file-watcher] fs.watch error:', err.message)
+    // Re-establish the watch after a brief delay
+    setTimeout(() => {
+      if (!win.isDestroyed()) {
+        startFileWatcher(projectPath, win)
+      }
+    }, 1000)
+  })
+
   watchers.set(projectPath, watcher)
 
+  // Periodic polling fallback (30s) — fs.watch is unreliable on some platforms.
+  const poller = setInterval(async () => {
+    if (win.isDestroyed()) {
+      clearInterval(poller)
+      pollers.delete(projectPath)
+      return
+    }
+    win.webContents.send('memory:update', await readMemory(projectPath))
+  }, 30_000)
+  pollers.set(projectPath, poller)
+
   // Send initial state immediately
-  win.webContents.send('memory:update', readMemory(projectPath))
+  readMemory(projectPath).then((data) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('memory:update', data)
+    }
+  })
 }
 
 export function stopFileWatcher(projectPath: string): void {
@@ -102,6 +139,11 @@ export function stopFileWatcher(projectPath: string): void {
   if (w) {
     w.close()
     watchers.delete(projectPath)
+  }
+  const p = pollers.get(projectPath)
+  if (p) {
+    clearInterval(p)
+    pollers.delete(projectPath)
   }
 }
 
