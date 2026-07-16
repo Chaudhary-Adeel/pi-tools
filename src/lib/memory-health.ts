@@ -124,7 +124,7 @@ export function validateRefs(
     const base = path.basename(ref);
     const matches = indexedFiles.filter((f) => path.basename(f) === base);
     if (matches.length === 1) {
-      result.fixablePaths.push({ from: ref, to: matches[0]! });
+      result.fixablePaths.push({ from: ref, to: matches[0]!.replace(/\\/g, "/") });
     } else {
       result.deadPaths.push(ref);
     }

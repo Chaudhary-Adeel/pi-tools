@@ -71,12 +71,22 @@ let _memoryRootCache: { cwd: string; root: string | null } | null = null;
 /** Find the memory root for the current project (walks up from cwd). */
 export function findMemoryRoot(cwd: string): string | null {
   const resolved = path.resolve(cwd);
+  // PI_MEMORY_SCOPE bounds the upward walk to this directory (for tests).
+  const scope = process.env.PI_MEMORY_SCOPE
+    ? path.resolve(process.env.PI_MEMORY_SCOPE)
+    : null;
   // Only cache positive hits — null results are cheap to re-walk and
   // become stale as soon as ensureMemoryDirs creates the directory.
   if (_memoryRootCache && _memoryRootCache.cwd === resolved && _memoryRootCache.root !== null) {
     // Verify cached entry is still valid — the memory dir may have been
     // removed (e.g. in tests). One existsSync beats a full walk.
-    if (fs.existsSync(_memoryRootCache.root)) {
+    if (scope) {
+      // With a scope set, cached root must still be within scope.
+      if (!_memoryRootCache.root.startsWith(scope + path.sep) && _memoryRootCache.root !== scope) {
+        _memoryRootCache = null; // invalidate
+      }
+    }
+    if (_memoryRootCache && fs.existsSync(_memoryRootCache.root)) {
       return _memoryRootCache.root;
     }
   }
@@ -89,6 +99,8 @@ export function findMemoryRoot(cwd: string): string | null {
       result = memPath;
       break;
     }
+    // Stop at scope boundary
+    if (scope && dir === scope) break;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -166,7 +178,7 @@ export function loadMemoryDir(dir: string): MemoryFile[] {
     const { frontmatter, body } = parseMemoryFile(raw);
     files.push({
       path: fp,
-      relPath: path.relative(path.dirname(dir), fp),
+      relPath: path.relative(path.dirname(dir), fp).replace(/\\/g, "/"),
       frontmatter,
       body,
       raw,
@@ -195,7 +207,7 @@ export function loadMemoryDirMetadata(dir: string): MemoryFileMeta[] {
     // regex on the entire file.
     const frontmatter = parseFrontmatterOnly(raw);
     files.push({
-      relPath: path.relative(path.dirname(dir), fp),
+      relPath: path.relative(path.dirname(dir), fp).replace(/\\/g, "/"),
       frontmatter,
     });
   }

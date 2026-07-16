@@ -37,10 +37,13 @@ function writeFile(relPath: string, content: string): string {
 before(() => {
   tmpDir = path.join(os.tmpdir(), "pi-memory-test-" + Date.now());
   fs.mkdirSync(tmpDir, { recursive: true });
+  // Scope memory lookups to the temp dir to avoid finding global ~/.pi/memory
+  process.env.PI_MEMORY_SCOPE = tmpDir;
 });
 
 after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  delete process.env.PI_MEMORY_SCOPE;
 });
 
 // Clean per-test: remove .pi dir
