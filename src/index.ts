@@ -33,7 +33,8 @@ import { registerInitCommand } from "./commands/init-command.ts";
 import { registerServeCommand } from "./commands/serve-command.ts";
 import { registerConfigCommand } from "./commands/config-command.ts";
 import { registerConnectorsCommand } from "./commands/connectors-command.ts";
-import { registerAgentsCommand } from "./commands/agents-command.ts";
+import { registerMcpCommand } from "./mcp/registry.ts";
+import { connectAllFromConfig } from "./mcp/client.ts";
 import { registerNewTaskCommand } from "./commands/new-task-command.ts";
 import { registerSubagentsCommand } from "./commands/subagents-command.ts";
 import { registerGitHubExploreTool } from "./tools/github-explore.ts";
@@ -106,6 +107,9 @@ export default function (pi: ExtensionAPI): void {
 
   // /config — configure git identity, greeting name, subagent model.
   registerConfigCommand(pi);
+
+  // /mcp — manage MCP server connections (Postgres, Slack, Filesystem, etc.)
+  registerMcpCommand(pi);
 
   // /connectors — list this package's connectors (tools, commands, integrations).
   registerConnectorsCommand(pi);
@@ -253,6 +257,9 @@ export default function (pi: ExtensionAPI): void {
 
     // Auto-bootstrap memory on first run — create starter files from codebase
     autoBootstrapMemory(ctx.cwd);
+
+    // Auto-connect MCP servers defined in .pi/mcp.json
+    void connectAllFromConfig(ctx.cwd).catch(() => {});
 
     // Cold-store objects and expired HTTP cache rows otherwise accumulate
     // forever — reclaim them at most once a day (timestamp persisted so
