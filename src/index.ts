@@ -15,6 +15,11 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { registerWebTools } from "./tools/web.ts";
 import { registerFileTools } from "./tools/files.ts";
 import { registerSearchTools } from "./tools/search.ts";
+import { registerTodoFinder } from "./tools/todo-finder.ts";
+import { registerRunTests } from "./tools/run-tests.ts";
+import { registerLint } from "./tools/lint.ts";
+import { registerTypeCheck } from "./tools/type-check.ts";
+import { registerGitLog } from "./tools/git-log.ts";
 import { registerAskTool } from "./tools/ask.ts";
 import { registerSubagentTool } from "./tools/subagents.ts";
 import { registerCompactBuiltins } from "./tools/builtins.ts";
@@ -63,6 +68,11 @@ export default function (pi: ExtensionAPI): void {
   registerFileTools(pi); //     read_file
   registerSearchTools(pi); //   grep_search, glob_files
   registerAskTool(pi); //        ask_user
+  registerTodoFinder(pi); //     todo_finder — scan TODO/FIXME/HACK markers
+  registerRunTests(pi); //       run_tests — auto-detect and run test suite
+  registerLint(pi); //           lint — auto-detect and run linter
+  registerTypeCheck(pi); //      type_check — auto-detect and run type checker
+  registerGitLog(pi); //         git_log — structured git history/blame
   registerSubagentTool(pi); //   spawn_subagents
   registerCompactBuiltins(pi); // compact edit/write output
   registerBrowserTools(pi); //  browser_navigate, snapshot, click, type, evaluate, console, screenshot
