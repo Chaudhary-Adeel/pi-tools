@@ -167,3 +167,8 @@ export function getPiCommand(): { command: string; args: string[] } {
   return { command: "pi", args: [] };
 }
 
+/** Check if a path exists (sync, lightweight). */
+export function exists(p: string): boolean {
+  try { fs.accessSync(p, fs.constants.F_OK); return true } catch { return false }
+}
+
