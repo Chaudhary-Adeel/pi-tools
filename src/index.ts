@@ -49,6 +49,8 @@ import { indexRepo } from "./cvm/symbols.ts";
 import { getWarmStore } from "./cvm/warm-store.ts";
 import { getGreetingName, getGitIdentity } from "./lib/config.ts";
 import { registerDelegationHarness } from "./lib/harness-register.ts";
+import { registerToolRepair } from "./lib/tool-repair-register.ts";
+import { resetToolRepairStats } from "./lib/tool-repair.ts";
 import { registerMemoryHealth } from "./lib/memory-health-register.ts";
 import { getRepoName } from "./lib/shared.ts";
 import { buildSessionSummary, hasMeaningfulActivity, distillLearnings } from "./lib/learn.ts";
@@ -134,6 +136,11 @@ export default function (pi: ExtensionAPI): void {
   // to a head+tail preview before it reaches the model; caps unlimited
   // read() calls at a sane default. Stats surface in /cvm.
   registerQuietOutput(pi);
+
+  // Tool-input repair — normalizes the malformed-but-recoverable tool
+  // arguments weaker/open models tend to emit (markdown auto-links leaking
+  // into path fields), so a formatting slip doesn't cost a whole turn.
+  registerToolRepair(pi);
 
   // Flag to opt out of automatic learning capture on exit.
   pi.registerFlag("no-auto-learn", {
@@ -249,6 +256,7 @@ export default function (pi: ExtensionAPI): void {
     // first context_resolve is near-instant.
     resetDeltaLedger();
     resetCvmMetrics();
+    resetToolRepairStats();
     void indexRepo(ctx.cwd).catch(() => {});
 
     // Auto-bootstrap memory on first run — create starter files from codebase

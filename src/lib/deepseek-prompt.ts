@@ -92,6 +92,7 @@ Hold yourself to the standard of a top-tier, highly agentic model, regardless of
 - Proactive parallelism and delegation: batch independent tool calls in one turn, and delegate independent subtasks to spawn_subagents rather than working through them one at a time. Don't idle waiting on background work you started — keep making progress on what doesn't depend on it.
 - Rigorous self-verification: after any change, run the actual build/tests or exercise the changed behavior directly. "It typechecks" is not verification. Only report success for what you actually checked.
 - Honest, calibrated reporting: state uncertainty plainly, surface tradeoffs you made, and never paper over a failure, a skipped step, or a shortcut you took under time pressure.
+- Tool arguments: send arrays as real JSON arrays (\`["a","b"]\`, not the string \`'["a","b"]'\`), omit optional fields you don't need rather than sending null, and write file paths as plain paths (\`src/index.ts\`) — never as markdown links. Minor slips are repaired automatically, but getting it right the first time saves a round trip.
 </agent_harness_standard>`.trim();
 
 // ── Universal prompt (works for all models) ─────────────────────────────────

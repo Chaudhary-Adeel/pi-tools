@@ -17,6 +17,7 @@ import {
   parallelizationHint,
 } from "./harness.ts";
 import { isAutoDelegateEnabled } from "./config.ts";
+import { formatToolRepairStats } from "./tool-repair.ts";
 import { isSubagentProcess } from "../tools/subagents.ts";
 
 const NUDGE_TYPE = "pi-tools:harness-nudge";
@@ -114,7 +115,15 @@ export function registerDelegationHarness(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       const enabled = isAutoDelegateEnabled(ctx.cwd);
       const header = enabled ? "" : "⚠ behavioral harness is OFF (/config autoDelegate on)\n\n";
-      ctx.ui.notify(header + tracker.formatStats() + "\n\n" + verifyTracker.formatStats(), "info");
+      ctx.ui.notify(
+        header +
+          tracker.formatStats() +
+          "\n\n" +
+          verifyTracker.formatStats() +
+          "\n\n" +
+          formatToolRepairStats(),
+        "info",
+      );
     },
   });
 }

@@ -43,6 +43,7 @@ sections below for how each works:
 | [Quiet Output](#quiet-output) | Compacts oversized tool output (including Pi's built-ins) before it reaches the model |
 | [Memory Health Engine](#memory-health-engine) | Autonomously scores, validates, dedupes, and heals `.pi/memory` against the live codebase |
 | [Behavioral Harness](#behavioral-harness) | Actively steers the model toward subagent fan-out and rigorous self-verification, on any model |
+| [Tool-Input Repair](#tool-input-repair) | Normalizes the malformed tool arguments weaker/open models emit, so a formatting slip doesn't cost a turn |
 
 ### Agent Tools
 
@@ -156,8 +157,23 @@ Prompt rules alone don't reliably change behavior — the model reads them once 
 - **Research-streak nudges** — 5+ sequential research calls (read/grep/glob/web/…) in one loop without a fan-out triggers a mid-stream steering nudge to break the remaining lookups into subagents. Rate-limited (once per loop, 3 per session). Main session only — subagents can't spawn subagents.
 - **Context-pressure nudges** — past 60% context usage with research still running, the harness suggests delegating the rest with `output_to_files: true` (once per session). Main session only.
 - **Unverified-change nudges** — files edited/written this turn with no build/test/lint/typecheck command run afterward triggers a turn-end reminder not to report success on an unverified change. Applies to the main session **and** every subagent — both make real edits and should be held to the same bar.
-- **`/harness`** — live stats: research calls, fan-outs, delegation ratio, file mutations vs. verification runs, nudges sent.
+- **`/harness`** — live stats: research calls, fan-outs, delegation ratio, file mutations vs. verification runs, nudges sent, tool-input repairs.
 - Disable everything with `/config autoDelegate off`.
+
+### Tool-Input Repair
+
+Most "this open model can't do tool calls" is a harness problem, not a model problem. Weaker/open models (DeepSeek, GLM, Qwen…) make a small, finite, repeatable set of formatting mistakes — and a strict schema turns each one into a wasted turn instead of a recoverable slip. pi-tools makes the contract forgiving in exactly those places:
+
+- **Stringified arrays** — `'["a","b"]'` sent as a JSON *string* instead of an actual array. Parsed back into the array it represents.
+- **Bare value where an array was expected** — `"foo"` or `{prompt: "…"}` instead of `["foo"]` / `[{prompt: "…"}]`. Wrapped into a single-element array. Order matters: JSON-parsing runs *first*, or `'["a","b"]'` would become `['["a","b"]']`.
+- **`null` for an optional field** instead of omitting it. Normalized to empty. (A genuinely *omitted* field is not treated as a repair — that would log a false positive on every call.)
+- **Numeric-keyed object** — `{"0":"a","1":"b"}` instead of `["a","b"]`. Converted via `Object.values`.
+- **Markdown auto-links leaking into paths** — some models emit `[notes.md](http://notes.md)` as a file path, applying a chat-formatting prior where it makes no sense. Only the *degenerate* case (link text equals URL-minus-protocol) is unwrapped; a real markdown link passes through untouched. Applies to Pi's built-in `read`/`write`/`edit` too, since it keys off field name.
+- **Relational invariants** — where no shape repair can help (e.g. `tasks {action:'update'}` with no `id`, since each field is independently valid), the tool answers with the *actual valid ids* and the expected shape instead of a bare schema complaint, so the model can self-correct next turn.
+
+Valid input is never touched — repair only runs on values that are actually malformed. Repairs are counted per-tool and surface in `/harness`, so a model regressing on a specific contract shows up before it costs you turns.
+
+**Why the schemas use permissive unions:** Pi's core validates tool arguments *before* any extension hook fires — a strict `Type.Array` makes Pi reject a malformed call upstream, where no repair layer can reach it. So pi-tools' own array-shaped params are declared as a union with a permissive fallback member, letting the call through to `execute()` where the repair actually happens. (Verified against Pi's bundled `validateToolArguments`; see `src/lib/tool-repair.ts` for the full reasoning.)
 
 **Subagent observability & non-blocking runs.** The live activity widget shows each subagent's *latest* action while it runs. Every run persists a full, untruncated trace per subagent (complete prompt, every tool-call activity event in order, final result) to `.pi/subagents/<runId>/`, inspectable any time with `/subagents`. `spawn_subagents` runs in the background by default — mirroring `/newTask`'s background mode but for a whole parallel batch — starting the fan-out and returning immediately so the main agent can keep working (implement the non-dependent parts, or continue other tasks) while subagents run, tracked via the `tasks` tool with a completion message posted when the batch finishes. Pass `background: false` to block the calling turn and wait for all results instead.
 
