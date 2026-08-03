@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text } from "../lib/shared.ts";
+import { repairArrayInput, recordRepair } from "../lib/tool-repair.ts";
 
 export function registerAskTool(pi: ExtensionAPI): void {
   pi.registerTool({
@@ -20,8 +21,12 @@ export function registerAskTool(pi: ExtensionAPI): void {
     ],
     parameters: Type.Object({
       question: Type.String({ description: "The question to ask the user." }),
+      // Union with a permissive string member so a stringified or bare
+      // value still reaches execute(), where repairArrayInput() normalizes
+      // it — a strict Type.Array would make Pi reject the call upstream.
+      // See lib/tool-repair.ts.
       choices: Type.Optional(
-        Type.Array(Type.String(), {
+        Type.Union([Type.Array(Type.String()), Type.String()], {
           description: "Optional fixed set of answers to choose from.",
         }),
       ),
@@ -39,10 +44,14 @@ export function registerAskTool(pi: ExtensionAPI): void {
             }`,
         );
       }
+      const fixedChoices = repairArrayInput<string>(params.choices);
+      if (fixedChoices.repaired) recordRepair("ask_user");
+      const choices = fixedChoices.value.filter((c) => typeof c === "string" && c.trim());
+
       try {
         let answer: string | undefined;
-        if (params.choices && params.choices.length > 0) {
-          answer = await ctx.ui.select(params.question, params.choices);
+        if (choices.length > 0) {
+          answer = await ctx.ui.select(params.question, choices);
         } else {
           answer = await ctx.ui.input(params.question, params.default ?? "");
         }

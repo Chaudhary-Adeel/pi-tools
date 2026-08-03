@@ -41,6 +41,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, firstText, truncate, getPiCommand } from "../lib/shared.ts";
+import { repairArrayInput, recordRepair, recordUnrepairable } from "../lib/tool-repair.ts";
 import { getSubagentModel } from "../lib/config.ts";
 import { addSubagentUsage, type SubagentUsage } from "../lib/subagent-tokens.ts";
 import { addTasks, updateTask } from "../lib/tasks.ts";
@@ -65,6 +66,55 @@ export function isSubagentProcess(): boolean {
 interface SubTask {
   prompt: string;
   context?: string;
+}
+
+const SUBTASK_SCHEMA = Type.Object({
+  prompt: Type.String({
+    description:
+      "Self-contained instruction for this subagent. It has no memory " +
+      "of the parent conversation — include all needed context.",
+  }),
+  context: Type.Optional(
+    Type.String({
+      description:
+        "Optional background to seed as a prior message before the prompt.",
+    }),
+  ),
+});
+
+/** Coerce whatever arrived in `tasks` into a real SubTask[]. Handles the
+ *  shapes weaker models actually send: a stringified JSON array, a single
+ *  bare task object, a bare prompt string, or an array whose entries are
+ *  bare strings instead of {prompt} objects. Already-valid input is
+ *  returned untouched (repaired: false). */
+export function normalizeSubTasks(raw: unknown): { tasks: SubTask[]; repaired: boolean } {
+  const arr = repairArrayInput<unknown>(raw);
+  let repaired = arr.repaired;
+  const tasks: SubTask[] = [];
+
+  for (const entry of arr.value) {
+    if (typeof entry === "string") {
+      const trimmed = entry.trim();
+      if (trimmed) {
+        tasks.push({ prompt: trimmed });
+        repaired = true;
+      }
+      continue;
+    }
+    if (entry && typeof entry === "object") {
+      const obj = entry as Record<string, unknown>;
+      // Some models nest the real payload one level deeper, or use a
+      // near-miss key name for the prompt.
+      const prompt = obj.prompt ?? obj.task ?? obj.instruction ?? obj.text;
+      if (typeof prompt === "string" && prompt.trim()) {
+        const context = typeof obj.context === "string" ? obj.context : undefined;
+        if (obj.prompt === undefined) repaired = true;
+        tasks.push(context ? { prompt: prompt.trim(), context } : { prompt: prompt.trim() });
+      }
+    }
+  }
+
+  return { tasks, repaired };
 }
 
 interface SubResult {
@@ -493,20 +543,18 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       "If you need to see exactly what a subagent did (not just its final answer), use /subagents <runId> or read the trace file mentioned in the result.",
     ],
     parameters: Type.Object({
-      tasks: Type.Array(
-        Type.Object({
-          prompt: Type.String({
-            description:
-              "Self-contained instruction for this subagent. It has no memory " +
-              "of the parent conversation — include all needed context.",
-          }),
-          context: Type.Optional(
-            Type.String({
-              description:
-                "Optional background to seed as a prior message before the prompt.",
-            }),
-          ),
-        }),
+      // Union with permissive members so common malformed shapes from
+      // weaker models — a stringified JSON array, a single bare task
+      // object, a bare prompt string — still pass Pi's upstream schema
+      // Check and reach execute(), where normalizeSubTasks() repairs them.
+      // A strict Type.Array would make Pi reject the whole call before any
+      // of our code runs. See lib/tool-repair.ts.
+      tasks: Type.Union(
+        [
+          Type.Array(SUBTASK_SCHEMA),
+          SUBTASK_SCHEMA,
+          Type.String(),
+        ],
         { description: "The subtasks to run (each in its own session)." },
       ),
       max_concurrency: Type.Optional(
@@ -537,8 +585,20 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
       ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const tasks: SubTask[] = (params.tasks as SubTask[]) ?? [];
-      if (tasks.length === 0) return text("No tasks provided.");
+      const normalized = normalizeSubTasks(params.tasks);
+      const tasks: SubTask[] = normalized.tasks;
+      if (tasks.length === 0) {
+        // Repair couldn't salvage anything — count it once as unrepairable
+        // (not also as a repair) and hand back model-readable guidance on
+        // the exact shape expected, rather than a bare schema complaint.
+        recordUnrepairable("spawn_subagents");
+        return text(
+          "No usable tasks found. Pass `tasks` as an array of objects, each " +
+            'with a self-contained "prompt" string — for example: ' +
+            'tasks: [{"prompt": "..."}, {"prompt": "..."}]. Retry with that shape.',
+        );
+      }
+      if (normalized.repaired) recordRepair("spawn_subagents");
 
       const concurrency = Math.min(16, Math.max(1, params.max_concurrency ?? 4));
       const total = tasks.length;

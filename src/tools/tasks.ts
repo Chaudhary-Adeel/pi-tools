@@ -8,6 +8,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { text, firstText } from "../lib/shared.ts";
+import { repairArrayInput, recordRepair, recordUnrepairable } from "../lib/tool-repair.ts";
 import {
   addTasks,
   clearCompleted,
@@ -42,8 +43,13 @@ export function registerTaskTool(pi: ExtensionAPI): void {
         ],
         { description: "What to do." },
       ),
+      // Union with a permissive string member so a model that sends
+      // '["a","b"]' (stringified) or a bare "a" still passes Pi's upstream
+      // schema Check and reaches execute(), where repairArrayInput()
+      // normalizes it. A strict Type.Array here would make Pi reject the
+      // call before any of our code runs. See lib/tool-repair.ts.
       subjects: Type.Optional(
-        Type.Array(Type.String(), {
+        Type.Union([Type.Array(Type.String()), Type.String()], {
           description: "For 'add': one or more task titles (imperative form).",
         }),
       ),
@@ -63,8 +69,19 @@ export function registerTaskTool(pi: ExtensionAPI): void {
       const cwd = ctx.cwd;
       switch (params.action) {
         case "add": {
-          const subjects = params.subjects ?? [];
-          if (subjects.length === 0) throw new Error("'add' needs subjects: [...titles].");
+          const fixed = repairArrayInput<string>(params.subjects);
+          const subjects = fixed.value.filter((s) => typeof s === "string" && s.trim());
+          if (subjects.length === 0) {
+            // Counted once as unrepairable (not also as a repair), with
+            // model-readable guidance on the expected shape so the model
+            // can self-correct on the next turn.
+            recordUnrepairable("tasks");
+            return text(
+              "'add' needs a non-empty `subjects` list of task titles — for " +
+                'example: subjects: ["write tests", "update docs"]. Retry with that shape.',
+            );
+          }
+          if (fixed.repaired) recordRepair("tasks");
           const added = addTasks(cwd, subjects);
           return text(
             `Added ${added.length} task(s):\n${formatTaskList(added)}`,
@@ -72,13 +89,35 @@ export function registerTaskTool(pi: ExtensionAPI): void {
           );
         }
         case "update": {
-          if (params.id === undefined) throw new Error("'update' needs an id.");
+          // Relational invariant: 'update' is meaningless without an id, and
+          // each field is independently valid so no shape repair can catch
+          // it. Answer with the list of ids that DO exist rather than a bare
+          // complaint, so the model can retry correctly on the next turn.
+          if (params.id === undefined) {
+            recordUnrepairable("tasks");
+            const open = loadTasks(cwd).filter((t) => t.status !== "completed");
+            const hint = open.length
+              ? `Open task ids: ${open.map((t) => t.id).join(", ")}.`
+              : "There are no open tasks to update.";
+            return text(
+              `'update' needs an \`id\` (the numeric task id). ${hint} ` +
+                "Retry with id plus the field(s) you want to change.",
+            );
+          }
           const updated = updateTask(cwd, params.id, {
             status: params.status as TaskStatus | undefined,
             subject: params.subject,
             notes: params.notes,
           });
-          if (!updated) throw new Error(`No task with id ${params.id}.`);
+          if (!updated) {
+            recordUnrepairable("tasks");
+            const known = loadTasks(cwd).map((t) => t.id);
+            return text(
+              `No task with id ${params.id}. ` +
+                (known.length ? `Known ids: ${known.join(", ")}.` : "The task list is empty.") +
+                " Use action 'list' to see current tasks.",
+            );
+          }
           return text(`Updated:\n${formatTaskList([updated])}`, {
             id: updated.id,
             status: updated.status,
